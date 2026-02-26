@@ -1,4 +1,21 @@
 CompileFlags:
   Add:
+    - "-std=gnu++23"
+    - "-ffreestanding"
+    - "-fno-exceptions"
+    - "-fno-rtti"
+    - "-Irocinante"
+
+---
+If:
+  PathMatch: "(^|.*/)rocinante/src/[^/]+\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$"
+CompileFlags:
+  Add:
     - "-I.."
+
+---
+If:
+  PathMatch: "(^|.*/)rocinante/src/[^/]+/.*\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$"
+CompileFlags:
+  Add:
     - "-I../.."
