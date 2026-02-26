@@ -18,7 +18,7 @@ static constinit Rocinante::Uart16550 uart(UART_BASE);
 
 [[noreturn]] static inline void halt() {
 	for (;;) {
-		asm volatile("" ::: "memory");
+		asm volatile("idle 0" ::: "memory");
 	}
 }
 
