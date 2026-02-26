@@ -5,6 +5,7 @@
 
 #include "kernel.h"
 
+#include <src/memory/memory.h>
 #include <src/sp/cpucfg.h>
 #include <src/sp/uart16550.h>
 #include <src/helpers/optional.h>
@@ -24,10 +25,15 @@ static constinit Rocinante::Uart16550 uart(UART_BASE);
 } // namespace
 
 extern "C" [[noreturn]] void kernel_main(uint64_t a0, uint64_t a1, uint64_t a2) {
+	Rocinante::Memory::InitEarly();
+
 	auto& cpucfg = Rocinante::GetCPUCFG();
 
-	uart.puts("Hello, Rocinante!\n");
-	uart.puts("Don the LoongArch64 armor and prepare to ride!\n");
+	Rocinante::String info;
+	info += "Hello, Rocinante!\n";
+	info += "Don the LoongArch64 armor and prepare to ride!\n";
+
+	uart.write(info);
 
 	// Print some information about the CPU configuration using the CPUCFG class
 	uart.puts("CPU Architecture: ");
@@ -51,6 +57,14 @@ extern "C" [[noreturn]] void kernel_main(uint64_t a0, uint64_t a1, uint64_t a2) 
 	} else {
 		uart.puts("MMU does not support page mapping mode\n");
 	}
+
+	// Let's read and print VALEN/PALEN as a sanity check that our CPUCFG class is working and we can read CPU-reported information correctly.
+	uart.puts("Supported virtual address bits (VALEN): ");
+	uart.write(Rocinante::to_string(cpucfg.VirtualAddressBits()));
+	uart.puts("\n");
+	uart.puts("Supported physical address bits (PALEN): ");
+	uart.write(Rocinante::to_string(cpucfg.PhysicalAddressBits()));
+	uart.puts("\n");
 
 	// &c...
 

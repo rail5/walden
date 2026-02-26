@@ -14,6 +14,9 @@ ASM_OBJDIR = $(BINDIR)/asm
 SP_SRCDIR  = $(SRCDIR)/sp
 SP_OBJDIR  = $(BINDIR)/sp
 
+MEM_SRCDIR = $(SRCDIR)/memory
+MEM_OBJDIR = $(BINDIR)/memory
+
 KERNEL_SRC = $(SRCDIR)/kernel.cpp
 KERNEL_OBJ = $(BINDIR)/kernel.o
 
@@ -27,7 +30,10 @@ ASM_OBJS   = $(patsubst $(ASM_SRCDIR)/%.S, $(ASM_OBJDIR)/%.o, $(ASM_SRCS))
 SP_SRCS    = $(wildcard $(SP_SRCDIR)/*.cpp)
 SP_OBJS    = $(patsubst $(SP_SRCDIR)/%.cpp, $(SP_OBJDIR)/%.o, $(SP_SRCS))
 
-ALL_OBJS   = $(ASM_OBJS) $(KERNEL_OBJ) $(ABI_OBJ) $(SP_OBJS)
+MEM_SRCS   = $(wildcard $(MEM_SRCDIR)/*.cpp)
+MEM_OBJS   = $(patsubst $(MEM_SRCDIR)/%.cpp, $(MEM_OBJDIR)/%.o, $(MEM_SRCS))
+
+ALL_OBJS   = $(ASM_OBJS) $(KERNEL_OBJ) $(ABI_OBJ) $(SP_OBJS) $(MEM_OBJS)
 
 LINKER_LD  = $(ASM_SRCDIR)/linker.ld
 
@@ -58,6 +64,10 @@ $(ASM_OBJDIR)/%.o: $(ASM_SRCDIR)/%.S
 
 $(SP_OBJDIR)/%.o: $(SP_SRCDIR)/%.cpp
 	@mkdir -p $(SP_OBJDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(MEM_OBJDIR)/%.o: $(MEM_SRCDIR)/%.cpp
+	@mkdir -p $(MEM_OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(KERNEL_OBJ): $(KERNEL_SRC)

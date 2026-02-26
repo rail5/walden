@@ -66,3 +66,7 @@ char Rocinante::Uart16550::getc() const {
 		asm volatile("idle 0" ::: "memory");
 	}
 }
+
+void Rocinante::Uart16550::write(Rocinante::String str) const {
+	puts(str.c_str());
+}

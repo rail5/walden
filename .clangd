@@ -4,18 +4,23 @@ CompileFlags:
     - "-ffreestanding"
     - "-fno-exceptions"
     - "-fno-rtti"
+    - "-Wno-unsafe-buffer-usage"
+    - "-Wno-reserved-identifier"
+    - "-Wno-missing-prototypes"
+    - "-Wno-padded"
+    - "-I."
     - "-Irocinante"
 
 ---
 If:
-  PathMatch: "(^|.*/)rocinante/src/[^/]+\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$"
+  PathMatch: "(^|.*/)(rocinante/)?src/[^/]+\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$"
 CompileFlags:
   Add:
     - "-I.."
 
 ---
 If:
-  PathMatch: "(^|.*/)rocinante/src/[^/]+/.*\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$"
+  PathMatch: "(^|.*/)(rocinante/)?src/[^/]+/.*\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$"
 CompileFlags:
   Add:
     - "-I../.."

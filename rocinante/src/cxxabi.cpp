@@ -33,9 +33,26 @@
 // true thread-safe local-static initialization, we can upgrade the guard
 // implementation to use atomics or a kernel spinlock.
 
+#include <cstddef>
 #include <cstdint>
+#include <new>
+
+#include "memory/heap.h"
 
 extern "C" {
+
+// Forward declarations:
+// These symbols are part of the Itanium C++ ABI surface area that the compiler
+// may reference. Declaring them before defining them keeps Clang happy when
+// warnings like -Wmissing-prototypes are enabled.
+int __cxa_atexit(void (*destructor)(void*), void* arg, void* dso_handle);
+extern void* __dso_handle;
+
+int __cxa_guard_acquire(std::uint64_t* guard);
+void __cxa_guard_release(std::uint64_t* guard);
+void __cxa_guard_abort(std::uint64_t* guard);
+
+[[noreturn]] void __cxa_pure_virtual();
 
 // ---------------------------------------------------------------------------
 // __cxa_atexit / __dso_handle
@@ -111,3 +128,116 @@ void __cxa_pure_virtual() {
 }
 
 } // extern "C"
+
+// ---------------------------------------------------------------------------
+// Global new/delete for a freestanding kernel
+// ---------------------------------------------------------------------------
+//
+// Why do we need this?
+// - In hosted C++ (normal userspace), the C++ runtime + libc provide operator
+//   new/delete (usually backed by malloc/free).
+// - In our kernel we link with -nostdlib, so nobody provides those symbols.
+//
+// What behavior do we want?
+// - operator new(size) must either return a valid pointer or (in standard C++)
+//   throw std::bad_alloc.
+// - But we compile with -fno-exceptions, so throwing is not viable.
+//
+// Therefore:
+// - The normal throwing forms will SPIN on OOM.
+// - The nothrow forms will return nullptr on OOM.
+//
+// This keeps failure modes explicit and avoids silently proceeding with null
+// pointers when using plain `new`.
+//
+// This should probably be scrapped
+// It's putting the cart before the horse a bit to worry about dynamic allocation before we have a memory manager,
+// but it makes it easier to write C++ code that uses dynamic allocation early on without having to worry about the
+// details of the heap implementation right away.
+// At any rate, we'll rework this later.
+
+namespace {
+
+[[noreturn]] void OutOfMemorySpin() {
+	for (;;) {
+		asm volatile("" ::: "memory");
+	}
+}
+
+} // namespace
+
+// ---- operator new (single object) ----
+void* operator new(std::size_t size) {
+	if (void* p = Rocinante::Heap::Alloc(size)) return p;
+	OutOfMemorySpin();
+}
+
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+	return Rocinante::Heap::Alloc(size);
+}
+
+// ---- operator new (array) ----
+void* operator new[](std::size_t size) {
+	if (void* p = Rocinante::Heap::Alloc(size)) return p;
+	OutOfMemorySpin();
+}
+
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+	return Rocinante::Heap::Alloc(size);
+}
+
+// ---- aligned operator new (over-aligned types) ----
+void* operator new(std::size_t size, std::align_val_t align) {
+	const std::size_t alignment = static_cast<std::size_t>(align);
+	if (void* p = Rocinante::Heap::Alloc(size, alignment)) return p;
+	OutOfMemorySpin();
+}
+
+void* operator new(std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
+	return Rocinante::Heap::Alloc(size, static_cast<std::size_t>(align));
+}
+
+void* operator new[](std::size_t size, std::align_val_t align) {
+	const std::size_t alignment = static_cast<std::size_t>(align);
+	if (void* p = Rocinante::Heap::Alloc(size, alignment)) return p;
+	OutOfMemorySpin();
+}
+
+void* operator new[](std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
+	return Rocinante::Heap::Alloc(size, static_cast<std::size_t>(align));
+}
+
+// ---- operator delete ----
+void operator delete(void* ptr) noexcept {
+	Rocinante::Heap::Free(ptr);
+}
+
+void operator delete[](void* ptr) noexcept {
+	Rocinante::Heap::Free(ptr);
+}
+
+// Sized delete (the compiler may emit calls to these in C++14+).
+void operator delete(void* ptr, std::size_t) noexcept {
+	Rocinante::Heap::Free(ptr);
+}
+
+void operator delete[](void* ptr, std::size_t) noexcept {
+	Rocinante::Heap::Free(ptr);
+}
+
+// Aligned delete.
+void operator delete(void* ptr, std::align_val_t) noexcept {
+	Rocinante::Heap::Free(ptr);
+}
+
+void operator delete[](void* ptr, std::align_val_t) noexcept {
+	Rocinante::Heap::Free(ptr);
+}
+
+void operator delete(void* ptr, std::size_t, std::align_val_t) noexcept {
+	Rocinante::Heap::Free(ptr);
+}
+
+void operator delete[](void* ptr, std::size_t, std::align_val_t) noexcept {
+	Rocinante::Heap::Free(ptr);
+}

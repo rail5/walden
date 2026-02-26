@@ -7,6 +7,8 @@
 
 #include <cstdint>
 
+#include <src/helpers/string.h>
+
 namespace Rocinante {
 
 class Uart16550 final {
@@ -94,6 +96,8 @@ class Uart16550 final {
 
 		// Blocking read: waits until a character is available in the receive buffer, then returns it.
 		char getc() const;
+
+		void write(Rocinante::String str) const;
 };
 
 } // namespace Rocinante
