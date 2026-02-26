@@ -11,6 +11,9 @@ TARGET     = $(BINDIR)/rocinante.elf
 ASM_SRCDIR = $(SRCDIR)/asm
 ASM_OBJDIR = $(BINDIR)/asm
 
+SP_SRCDIR  = $(SRCDIR)/sp
+SP_OBJDIR  = $(BINDIR)/sp
+
 KERNEL_SRC = $(SRCDIR)/kernel.cpp
 KERNEL_OBJ = $(BINDIR)/kernel.o
 
@@ -21,7 +24,10 @@ ABI_OBJ    = $(BINDIR)/cxxabi.o
 ASM_SRCS   = $(wildcard $(ASM_SRCDIR)/*.S)
 ASM_OBJS   = $(patsubst $(ASM_SRCDIR)/%.S, $(ASM_OBJDIR)/%.o, $(ASM_SRCS))
 
-ALL_OBJS   = $(ASM_OBJS) $(KERNEL_OBJ) $(ABI_OBJ)
+SP_SRCS    = $(wildcard $(SP_SRCDIR)/*.cpp)
+SP_OBJS    = $(patsubst $(SP_SRCDIR)/%.cpp, $(SP_OBJDIR)/%.o, $(SP_SRCS))
+
+ALL_OBJS   = $(ASM_OBJS) $(KERNEL_OBJ) $(ABI_OBJ) $(SP_OBJS)
 
 LINKER_LD  = $(ASM_SRCDIR)/linker.ld
 
@@ -49,6 +55,10 @@ $(TARGET): check-toolchain $(ALL_OBJS)
 $(ASM_OBJDIR)/%.o: $(ASM_SRCDIR)/%.S
 	@mkdir -p $(ASM_OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(SP_OBJDIR)/%.o: $(SP_SRCDIR)/%.cpp
+	@mkdir -p $(SP_OBJDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(KERNEL_OBJ): $(KERNEL_SRC)
 	@mkdir -p $(BINDIR)
