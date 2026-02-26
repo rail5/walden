@@ -45,7 +45,7 @@ CXX        = $(CROSS)g++
 LD         = $(CROSS)ld
 CFLAGS     = -ffreestanding -nostdlib -fno-asynchronous-unwind-tables -Wall -Wextra -O2 -I$(PROJECT_ROOT_DIRECTORY)
 CXXFLAGS   = $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++23
-LDFLAGS    = -T $(LINKER_LD) -nostdlib
+LDFLAGS    = -T $(LINKER_LD) -nostdlib -s
 
 all: $(TARGET)
 
