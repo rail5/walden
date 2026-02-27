@@ -15,14 +15,13 @@ namespace {
 // - LoongArch Privileged Architecture (CSRs)
 // Linux LoongArch headers use the same numbering (e.g. LOONGARCH_CSR_ECFG = 0x4)
 namespace Csr {
-	[[maybe_unused]] constexpr std::uint32_t CurrentModeInformation = 0x0;   // CSR.CRMD
-	[[maybe_unused]] constexpr std::uint32_t ExceptionConfiguration = 0x4;   // CSR.ECFG
-	[[maybe_unused]] constexpr std::uint32_t ExceptionEntryAddress = 0xC;    // CSR.EENTRY
-	[[maybe_unused]] constexpr std::uint32_t TlbRefillEntryAddress = 0x88;   // CSR.TLBRENTRY
-	[[maybe_unused]] constexpr std::uint32_t MachineErrorEntryAddress = 0x93; // CSR.MERRENTRY
-
-	[[maybe_unused]] constexpr std::uint32_t TimerConfiguration = 0x41;      // CSR.TCFG
-	[[maybe_unused]] constexpr std::uint32_t TimerInterruptClear = 0x44;     // CSR.TINTCLR
+	constexpr std::uint32_t CurrentModeInformation = 0x0;   // CSR.CRMD
+	constexpr std::uint32_t ExceptionConfiguration = 0x4;   // CSR.ECFG
+	constexpr std::uint32_t ExceptionEntryAddress = 0xC;    // CSR.EENTRY
+	constexpr std::uint32_t TlbRefillEntryAddress = 0x88;   // CSR.TLBRENTRY
+	constexpr std::uint32_t MachineErrorEntryAddress = 0x93; // CSR.MERRENTRY
+	constexpr std::uint32_t TimerConfiguration = 0x41;      // CSR.TCFG
+	constexpr std::uint32_t TimerInterruptClear = 0x44;     // CSR.TINTCLR
 }
 
 namespace CurrentModeInformation {
