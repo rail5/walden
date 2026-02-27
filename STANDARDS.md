@@ -8,13 +8,18 @@ Walden / Rocinante are compiled with the **C++23** standard with GNU extensions 
 
 ## Core Principles
 
+The big 3:
+
+- **Lower-level -> more detail.** The lower-level the code, the more comments and explicitness it should have. Once we start writing code that deals directly with CPU registers, exception handling, boot protocols, etc., we should be *more* explicit and *more* verbose than in any other layer, not less.
+- **Write code to be read.** Code does *not* mean "encoded." You should write code the way you write an essay: with the reader in mind. The reader may be you in 6 months, or a new contributor who has never worked on low-level code before. Assume the reader is intelligent but does not have the context you have in your head right now.
+- **Highlight flaws.** The flaws should be the most obvious thing in the code. Do not obscure them in order to save your pride -- your pride doesn't matter. If the real reason for something is "I don't understand this architecture as well as I'd like to," then **say that.** The goal isn't to look good, the goal is to build a system.
+
+Further:
+
 - **Be explicit and self-documenting.** Prefer clear names and named constants over abbreviations and “obvious to me” shortcuts.
 - **Avoid magic numbers.** If a value comes from the architecture, hardware, ABI, or a spec: give it a name and explain it.
 - **Preserve invariants.** A lot of this code is ABI-sensitive (assembly -- C++ struct layout, linker script expectations, boot protocol). Make those invariants visible and hard to accidentally break.
 - **Keep changes minimal and focused.** Don’t refactor unrelated code in the same change.
-- **Lower-level -> more detail.** The lower-level the code, the more comments and explicitness it should have. Once we start writing code that deals directly with CPU registers, exception handling, boot protocols, etc., we should be *more* explicit and *more* verbose than in any other layer, not less.
-- **Write code to be read.** Code does *not* mean "encoded." You should write code the way you write an essay: with the reader in mind. The reader may be you in 6 months, or a new contributor who has never worked on low-level code before. Assume the reader is intelligent but does not have the context you have in your head right now.
-- **Highlight flaws.** The flaws should be the most obvious thing in the code. Do not obscure them in order to save your pride -- your pride doesn't matter. If the real reason for something is "I don't understand this architecture as well as I'd like to," then **say that.** The goal isn't to look good, the goal is to build a system.
 
 ## Documentation Expectations (especially low-level)
 
