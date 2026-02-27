@@ -47,7 +47,7 @@ class String final {
 			m_data = new_data;
 		}
 	public:
-		String() : m_data(nullptr), m_length(0) {}
+		String() : m_data(nullptr), m_capacity(0), m_length(0) {}
 		String(const char* data, std::uint32_t length) : m_data(nullptr), m_capacity(0), m_length(0) {
 			if (data == nullptr || length == 0) return;
 			m_capacity = length + 1;
@@ -61,6 +61,59 @@ class String final {
 
 		// Backward-compatible overload: treats `data` as input bytes and copies them.
 		String(char* data, std::uint32_t length) : String(static_cast<const char*>(data), length) {}
+
+		String(const String& other) : m_data(nullptr), m_capacity(0), m_length(0) {
+			if (other.m_data == nullptr || other.m_length == 0) return;
+			m_capacity = other.m_length + 1;
+			m_data = static_cast<char*>(Rocinante::Heap::Alloc(m_capacity, alignof(char)));
+			for (std::uint32_t i = 0; i < other.m_length; i++) {
+				m_data[i] = other.m_data[i];
+			}
+			m_length = other.m_length;
+			m_data[m_length] = '\0';
+		}
+
+		String& operator=(const String& other) {
+			if (this == &other) return *this;
+
+			if (m_data) {
+				Rocinante::Heap::Free(m_data);
+				m_data = nullptr;
+				m_capacity = 0;
+				m_length = 0;
+			}
+
+			if (other.m_data == nullptr || other.m_length == 0) return *this;
+
+			m_capacity = other.m_length + 1;
+			m_data = static_cast<char*>(Rocinante::Heap::Alloc(m_capacity, alignof(char)));
+			for (std::uint32_t i = 0; i < other.m_length; i++) {
+				m_data[i] = other.m_data[i];
+			}
+			m_length = other.m_length;
+			m_data[m_length] = '\0';
+			return *this;
+		}
+
+		String(String&& other) noexcept : m_data(other.m_data), m_capacity(other.m_capacity), m_length(other.m_length) {
+			other.m_data = nullptr;
+			other.m_capacity = 0;
+			other.m_length = 0;
+		}
+
+		String& operator=(String&& other) noexcept {
+			if (this == &other) return *this;
+			if (m_data) Rocinante::Heap::Free(m_data);
+
+			m_data = other.m_data;
+			m_capacity = other.m_capacity;
+			m_length = other.m_length;
+
+			other.m_data = nullptr;
+			other.m_capacity = 0;
+			other.m_length = 0;
+			return *this;
+		}
 
 		~String() {
 			if (m_data) Rocinante::Heap::Free(m_data);
