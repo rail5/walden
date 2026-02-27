@@ -50,15 +50,6 @@
 // stack according to the LoongArch psABI.
 .equ TF_SIZE, 304
 
-// Backwards-compatible aliases used by the code below.
-.equ TF_GPR_BASE, TF_GENERAL_PURPOSE_REGISTERS
-.equ TF_ERA,      TF_EXCEPTION_RETURN_ADDRESS
-.equ TF_ESTAT,    TF_EXCEPTION_STATUS
-.equ TF_BADV,     TF_BAD_VIRTUAL_ADDRESS
-.equ TF_CRMD,     TF_CURRENT_MODE_INFORMATION
-.equ TF_PRMD,     TF_PREVIOUS_MODE_INFORMATION
-.equ TF_ECFG,     TF_EXCEPTION_CONFIGURATION
-
 // -----------------------------------------------------------------------------
 // CSRs used by this stub
 // -----------------------------------------------------------------------------
@@ -83,14 +74,6 @@
 .equ CSR_EXCEPTION_STATUS,          0x5  // CSR.ESTAT
 .equ CSR_EXCEPTION_RETURN_ADDRESS,  0x6  // CSR.ERA
 .equ CSR_BAD_VIRTUAL_ADDRESS,       0x7  // CSR.BADV
-
-// Aliases used by the instruction stream below.
-.equ CSR_CRMD,  CSR_CURRENT_MODE_INFORMATION
-.equ CSR_PRMD,  CSR_PREVIOUS_MODE_INFORMATION
-.equ CSR_ECFG,  CSR_EXCEPTION_CONFIGURATION
-.equ CSR_ESTAT, CSR_EXCEPTION_STATUS
-.equ CSR_ERA,   CSR_EXCEPTION_RETURN_ADDRESS
-.equ CSR_BADV,  CSR_BAD_VIRTUAL_ADDRESS
 
 // C++ handler provided by kernel.cpp.
 .extern RocinanteTrapHandler
@@ -118,51 +101,51 @@ __exception_entry:
 	// value as ($sp + TF_SIZE).
 
 	// r0 is architecturally hardwired to zero.
-	st.d $zero, $sp, TF_GPR_BASE+0
+	st.d $zero, $sp, TF_GENERAL_PURPOSE_REGISTERS+0
 
 	// r1..r11.
 	// We intentionally do not use any of these registers as scratch before they
 	// are saved.
-	st.d $ra,   $sp, TF_GPR_BASE+8
-	st.d $tp,   $sp, TF_GPR_BASE+16
+	st.d $ra,   $sp, TF_GENERAL_PURPOSE_REGISTERS+8
+	st.d $tp,   $sp, TF_GENERAL_PURPOSE_REGISTERS+16
 	// r3 ($sp) should reflect the pre-trap stack pointer.
 	addi.d $t0, $sp, TF_SIZE
-	st.d $t0,   $sp, TF_GPR_BASE+24
-	st.d $a0,   $sp, TF_GPR_BASE+32
-	st.d $a1,   $sp, TF_GPR_BASE+40
-	st.d $a2,   $sp, TF_GPR_BASE+48
-	st.d $a3,   $sp, TF_GPR_BASE+56
-	st.d $a4,   $sp, TF_GPR_BASE+64
-	st.d $a5,   $sp, TF_GPR_BASE+72
-	st.d $a6,   $sp, TF_GPR_BASE+80
-	st.d $a7,   $sp, TF_GPR_BASE+88
+	st.d $t0,   $sp, TF_GENERAL_PURPOSE_REGISTERS+24
+	st.d $a0,   $sp, TF_GENERAL_PURPOSE_REGISTERS+32
+	st.d $a1,   $sp, TF_GENERAL_PURPOSE_REGISTERS+40
+	st.d $a2,   $sp, TF_GENERAL_PURPOSE_REGISTERS+48
+	st.d $a3,   $sp, TF_GENERAL_PURPOSE_REGISTERS+56
+	st.d $a4,   $sp, TF_GENERAL_PURPOSE_REGISTERS+64
+	st.d $a5,   $sp, TF_GENERAL_PURPOSE_REGISTERS+72
+	st.d $a6,   $sp, TF_GENERAL_PURPOSE_REGISTERS+80
+	st.d $a7,   $sp, TF_GENERAL_PURPOSE_REGISTERS+88
 
 	// r12..r14 ($t0..$t2) are restored from CSR.KS*.
 	csrrd  $t0, CSR_KS0
-	st.d   $t0, $sp, TF_GPR_BASE+96
+	st.d   $t0, $sp, TF_GENERAL_PURPOSE_REGISTERS+96
 	csrrd  $t0, CSR_KS1
-	st.d   $t0, $sp, TF_GPR_BASE+104
+	st.d   $t0, $sp, TF_GENERAL_PURPOSE_REGISTERS+104
 	csrrd  $t0, CSR_KS2
-	st.d   $t0, $sp, TF_GPR_BASE+112
+	st.d   $t0, $sp, TF_GENERAL_PURPOSE_REGISTERS+112
 
 	// gpr[15]..gpr[31]
-	st.d $t3,   $sp, TF_GPR_BASE+120
-	st.d $t4,   $sp, TF_GPR_BASE+128
-	st.d $t5,   $sp, TF_GPR_BASE+136
-	st.d $t6,   $sp, TF_GPR_BASE+144
-	st.d $t7,   $sp, TF_GPR_BASE+152
-	st.d $t8,   $sp, TF_GPR_BASE+160
-	st.d $r21,  $sp, TF_GPR_BASE+168
-	st.d $fp,   $sp, TF_GPR_BASE+176
-	st.d $s0,   $sp, TF_GPR_BASE+184
-	st.d $s1,   $sp, TF_GPR_BASE+192
-	st.d $s2,   $sp, TF_GPR_BASE+200
-	st.d $s3,   $sp, TF_GPR_BASE+208
-	st.d $s4,   $sp, TF_GPR_BASE+216
-	st.d $s5,   $sp, TF_GPR_BASE+224
-	st.d $s6,   $sp, TF_GPR_BASE+232
-	st.d $s7,   $sp, TF_GPR_BASE+240
-	st.d $s8,   $sp, TF_GPR_BASE+248
+	st.d $t3,   $sp, TF_GENERAL_PURPOSE_REGISTERS+120
+	st.d $t4,   $sp, TF_GENERAL_PURPOSE_REGISTERS+128
+	st.d $t5,   $sp, TF_GENERAL_PURPOSE_REGISTERS+136
+	st.d $t6,   $sp, TF_GENERAL_PURPOSE_REGISTERS+144
+	st.d $t7,   $sp, TF_GENERAL_PURPOSE_REGISTERS+152
+	st.d $t8,   $sp, TF_GENERAL_PURPOSE_REGISTERS+160
+	st.d $r21,  $sp, TF_GENERAL_PURPOSE_REGISTERS+168
+	st.d $fp,   $sp, TF_GENERAL_PURPOSE_REGISTERS+176
+	st.d $s0,   $sp, TF_GENERAL_PURPOSE_REGISTERS+184
+	st.d $s1,   $sp, TF_GENERAL_PURPOSE_REGISTERS+192
+	st.d $s2,   $sp, TF_GENERAL_PURPOSE_REGISTERS+200
+	st.d $s3,   $sp, TF_GENERAL_PURPOSE_REGISTERS+208
+	st.d $s4,   $sp, TF_GENERAL_PURPOSE_REGISTERS+216
+	st.d $s5,   $sp, TF_GENERAL_PURPOSE_REGISTERS+224
+	st.d $s6,   $sp, TF_GENERAL_PURPOSE_REGISTERS+232
+	st.d $s7,   $sp, TF_GENERAL_PURPOSE_REGISTERS+240
+	st.d $s8,   $sp, TF_GENERAL_PURPOSE_REGISTERS+248
 
 	// Snapshot key CSRs.
 	//
@@ -172,18 +155,18 @@ __exception_entry:
 	// - CSR.BADV:  faulting address for address-related exceptions
 	// - CSR.CRMD/CSR.PRMD: current/previous privilege & interrupt state
 	// - CSR.ECFG:  interrupt line masking configuration
-	csrrd  $t0, CSR_ERA
-	st.d   $t0, $sp, TF_ERA
-	csrrd  $t0, CSR_ESTAT
-	st.d   $t0, $sp, TF_ESTAT
-	csrrd  $t0, CSR_BADV
-	st.d   $t0, $sp, TF_BADV
-	csrrd  $t0, CSR_CRMD
-	st.d   $t0, $sp, TF_CRMD
-	csrrd  $t0, CSR_PRMD
-	st.d   $t0, $sp, TF_PRMD
-	csrrd  $t0, CSR_ECFG
-	st.d   $t0, $sp, TF_ECFG
+	csrrd  $t0, CSR_EXCEPTION_RETURN_ADDRESS
+	st.d   $t0, $sp, TF_EXCEPTION_RETURN_ADDRESS
+	csrrd  $t0, CSR_EXCEPTION_STATUS
+	st.d   $t0, $sp, TF_EXCEPTION_STATUS
+	csrrd  $t0, CSR_BAD_VIRTUAL_ADDRESS
+	st.d   $t0, $sp, TF_BAD_VIRTUAL_ADDRESS
+	csrrd  $t0, CSR_CURRENT_MODE_INFORMATION
+	st.d   $t0, $sp, TF_CURRENT_MODE_INFORMATION
+	csrrd  $t0, CSR_PREVIOUS_MODE_INFORMATION
+	st.d   $t0, $sp, TF_PREVIOUS_MODE_INFORMATION
+	csrrd  $t0, CSR_EXCEPTION_CONFIGURATION
+	st.d   $t0, $sp, TF_EXCEPTION_CONFIGURATION
 
 	// Call the C++ handler: RocinanteTrapHandler(TrapFrame*).
 	//
@@ -201,42 +184,42 @@ __exception_entry:
 	// skip over a BREAK instruction during self-test), we must write that updated
 	// address back into CSR.ERA. Otherwise, `ertn` would return to the original
 	// trapping instruction and immediately re-enter the handler.
-	ld.d   $t0, $sp, TF_ERA
-	csrwr  $t0, CSR_ERA
+	ld.d   $t0, $sp, TF_EXCEPTION_RETURN_ADDRESS
+	csrwr  $t0, CSR_EXCEPTION_RETURN_ADDRESS
 
 	// Restore GPRs (except $sp, which is restored by popping the TrapFrame).
-	ld.d $ra,   $sp, TF_GPR_BASE+8
-	ld.d $tp,   $sp, TF_GPR_BASE+16
-	ld.d $a0,   $sp, TF_GPR_BASE+32
-	ld.d $a1,   $sp, TF_GPR_BASE+40
-	ld.d $a2,   $sp, TF_GPR_BASE+48
-	ld.d $a3,   $sp, TF_GPR_BASE+56
-	ld.d $a4,   $sp, TF_GPR_BASE+64
-	ld.d $a5,   $sp, TF_GPR_BASE+72
-	ld.d $a6,   $sp, TF_GPR_BASE+80
-	ld.d $a7,   $sp, TF_GPR_BASE+88
+	ld.d $ra,   $sp, TF_GENERAL_PURPOSE_REGISTERS+8
+	ld.d $tp,   $sp, TF_GENERAL_PURPOSE_REGISTERS+16
+	ld.d $a0,   $sp, TF_GENERAL_PURPOSE_REGISTERS+32
+	ld.d $a1,   $sp, TF_GENERAL_PURPOSE_REGISTERS+40
+	ld.d $a2,   $sp, TF_GENERAL_PURPOSE_REGISTERS+48
+	ld.d $a3,   $sp, TF_GENERAL_PURPOSE_REGISTERS+56
+	ld.d $a4,   $sp, TF_GENERAL_PURPOSE_REGISTERS+64
+	ld.d $a5,   $sp, TF_GENERAL_PURPOSE_REGISTERS+72
+	ld.d $a6,   $sp, TF_GENERAL_PURPOSE_REGISTERS+80
+	ld.d $a7,   $sp, TF_GENERAL_PURPOSE_REGISTERS+88
 
-	ld.d $t0,   $sp, TF_GPR_BASE+96
-	ld.d $t1,   $sp, TF_GPR_BASE+104
-	ld.d $t2,   $sp, TF_GPR_BASE+112
+	ld.d $t0,   $sp, TF_GENERAL_PURPOSE_REGISTERS+96
+	ld.d $t1,   $sp, TF_GENERAL_PURPOSE_REGISTERS+104
+	ld.d $t2,   $sp, TF_GENERAL_PURPOSE_REGISTERS+112
 
-	ld.d $t3,   $sp, TF_GPR_BASE+120
-	ld.d $t4,   $sp, TF_GPR_BASE+128
-	ld.d $t5,   $sp, TF_GPR_BASE+136
-	ld.d $t6,   $sp, TF_GPR_BASE+144
-	ld.d $t7,   $sp, TF_GPR_BASE+152
-	ld.d $t8,   $sp, TF_GPR_BASE+160
-	ld.d $r21,  $sp, TF_GPR_BASE+168
-	ld.d $fp,   $sp, TF_GPR_BASE+176
-	ld.d $s0,   $sp, TF_GPR_BASE+184
-	ld.d $s1,   $sp, TF_GPR_BASE+192
-	ld.d $s2,   $sp, TF_GPR_BASE+200
-	ld.d $s3,   $sp, TF_GPR_BASE+208
-	ld.d $s4,   $sp, TF_GPR_BASE+216
-	ld.d $s5,   $sp, TF_GPR_BASE+224
-	ld.d $s6,   $sp, TF_GPR_BASE+232
-	ld.d $s7,   $sp, TF_GPR_BASE+240
-	ld.d $s8,   $sp, TF_GPR_BASE+248
+	ld.d $t3,   $sp, TF_GENERAL_PURPOSE_REGISTERS+120
+	ld.d $t4,   $sp, TF_GENERAL_PURPOSE_REGISTERS+128
+	ld.d $t5,   $sp, TF_GENERAL_PURPOSE_REGISTERS+136
+	ld.d $t6,   $sp, TF_GENERAL_PURPOSE_REGISTERS+144
+	ld.d $t7,   $sp, TF_GENERAL_PURPOSE_REGISTERS+152
+	ld.d $t8,   $sp, TF_GENERAL_PURPOSE_REGISTERS+160
+	ld.d $r21,  $sp, TF_GENERAL_PURPOSE_REGISTERS+168
+	ld.d $fp,   $sp, TF_GENERAL_PURPOSE_REGISTERS+176
+	ld.d $s0,   $sp, TF_GENERAL_PURPOSE_REGISTERS+184
+	ld.d $s1,   $sp, TF_GENERAL_PURPOSE_REGISTERS+192
+	ld.d $s2,   $sp, TF_GENERAL_PURPOSE_REGISTERS+200
+	ld.d $s3,   $sp, TF_GENERAL_PURPOSE_REGISTERS+208
+	ld.d $s4,   $sp, TF_GENERAL_PURPOSE_REGISTERS+216
+	ld.d $s5,   $sp, TF_GENERAL_PURPOSE_REGISTERS+224
+	ld.d $s6,   $sp, TF_GENERAL_PURPOSE_REGISTERS+232
+	ld.d $s7,   $sp, TF_GENERAL_PURPOSE_REGISTERS+240
+	ld.d $s8,   $sp, TF_GENERAL_PURPOSE_REGISTERS+248
 
 	// Pop the TrapFrame and return from exception.
 	addi.d $sp, $sp, TF_SIZE
