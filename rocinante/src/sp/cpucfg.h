@@ -124,9 +124,7 @@ class CPUCFG final {
 		 * - Bit 2: PGGMU: 1 = MMU supports page mapping mode, 0 = MMU does not support page mapping mode
 		 * - Bit 3: IOCSR: 1 = CPU supports the IOCSR instruction, 0 = CPU does not support the IOCSR instruction
 		 * - Bits 4-11: PALEN: "Supported physical address bits PALEN value minus 1"[sic]
-		 *    TODO(@rail5): Does that mean this returns PALEN or PALEN-1? The wording is ambiguous
 		 * - Bits 12-19: VALEN: "Supported virtual address bits VALEN value minus 1"[sic]
-		 *    TODO(@rail5): Does that mean this returns VALEN or VALEN-1? The wording is ambiguous
 		 * - Bit 20: UAL: 1 = CPU supports non-aligned memory access, 0 = CPU does not support non-aligned memory access
 		 * - Bit 21: RI: 1 = support for page attribute "Read Inhibit", 0 = no support for page attribute "Read Inhibit"
 		 * - Bit 22: EP: 1 = support for page attribute "Execution Protection", 0 = no support for page attribute "Execution Protection"
@@ -275,30 +273,129 @@ class CPUCFG final {
 			return _word(0x0);
 		}
 
+		/**
+		 * @brief Which architecture variant the CPU implements
+		 * 
+		 * @return Architecture The architecture variant implemented by the CPU
+		 */
 		Architecture Arch() {
 			return static_cast<Architecture>(_bits(_word(0x1), 1, 0));
 		}
 
+		/**
+		 * @brief Whether the MMU supports page mapping mode (as opposed to only segment mapping mode)
+		 * 
+		 */
 		bool MMUSupportsPageMappingMode() {
 			return _bit(_word(0x1), 2);
 		}
 
+		/**
+		 * @brief Whether the CPU supports the IOCSR instruction
+		 * 
+		 */
 		bool SupportsIOCSR() {
 			return _bit(_word(0x1), 3);
 		}
 
+		/**
+		 * @brief PALEN is the number of physical address bits supported by the CPU.
+		 * That is, the physical address space supported by the CPU is 2^(PALEN) bytes.
+		 * This returns PALEN-1, as defined in the ISA spec, because the CPUCFG instruction encodes it that way for some reason.
+		 * 
+		 * @return uint32_t 
+		 */
 		uint32_t PALENMinus1() { return _bits(_word(0x1), 11, 4); }
+
+		/**
+		 * @brief VALEN is the number of virtual address bits supported by the CPU.
+		 * That is, the virtual address space supported by the CPU is 2^(VALEN) bytes.
+		 * This returns VALEN-1, as defined in the ISA spec, because the CPUCFG instruction encodes it that way for some reason.
+		 * 
+		 * @return uint32_t 
+		 */
 		uint32_t VALENMinus1() { return _bits(_word(0x1), 19, 12); }
+
+		/**
+		 * @brief Returns the number of physical address bits supported by the CPU.
+		 * I.e., the size of the physical address space supported by the CPU is 2^(PhysicalAddressBits()) bytes.
+		 * This actually just calls PALENMinus1() + 1 for convenience
+		 * 
+		 * @return uint32_t 
+		 */
 		uint32_t PhysicalAddressBits() { return PALENMinus1() + 1; }
+
+		/**
+		 * @brief Returns the number of virtual address bits supported by the CPU.
+		 * I.e., the size of the virtual address space supported by the CPU is 2^(VirtualAddressBits()) bytes.
+		 * This actually just calls VALENMinus1() + 1 for convenience
+		 * 
+		 * @return uint32_t 
+		 */
 		uint32_t VirtualAddressBits() { return VALENMinus1() + 1; }
 
+		/**
+		 * @brief Whether the CPU supports unaligned memory access
+		 * 
+		 * @return true 
+		 * @return false 
+		 */
 		bool SupportsUnalignedAccess() { return _bit(_word(0x1), 20); }
+
+		/**
+		 * @brief Whether the CPU supports the "Read Inhibit" page attribute, which prevents reads from a page
+		 * (but still allows writes and execution if those attributes are supported and set)
+		 * 
+		 * @return true 
+		 * @return false 
+		 */
 		bool SupportsReadInhibit() { return _bit(_word(0x1), 21); }
+
+		/**
+		 * @brief Whether the CPU supports execution protection (i.e., the ability to mark pages as non-executable)
+		 * 
+		 * @return true 
+		 * @return false 
+		 */
 		bool SupportsExecProtection() { return _bit(_word(0x1), 22); }
+
+		/**
+		 * @brief Whether the CPU supports the RPLV (Read Protection Level Verification) page attribute,
+		 * which allows marking pages as only readable at or above a certain privilege level
+		 * 
+		 * @return true 
+		 * @return false 
+		 */
 		bool SupportsRPLV() { return _bit(_word(0x1), 23); }
+
+		/**
+		 * @brief Whether the CPU supports huge pages (e.g., 32MB pages)
+		 * 
+		 * @return true 
+		 * @return false 
+		 */
 		bool SupportsHugePage() { return _bit(_word(0x1), 24); }
+
+		/**
+		 * @brief Whether the CPU supports the CRC instruction
+		 * According to the ISA spec, this means support for "CRC instruction (meaning: info such as 'Loongson3A5000 @ 2.5GHz')",
+		 * which is a bit vague, but presumably means some kind of CRC instruction that can be used to identify the exact CPU model
+		 * and its clock speed, which is useful for things like optimized code paths and performance monitoring.
+		 * 
+		 * @return true 
+		 * @return false 
+		 */
 		bool SupportsCRC() { return _bit(_word(0x1), 25); }
+
+		/**
+		 * @brief Whether the CPU's external interrupt is in message interrupt mode (i.e., uses a message-based interrupt mechanism)
+		 * 
+		 * @return true 
+		 * @return false 
+		 */
 		bool ExternalInterruptIsMessageInterruptMode() { return _bit(_word(0x1), 26); }
+
+		// TODO(@rail5): Comments for methods for word 0x2 and later
 
 		bool SupportsFP() { return _bit(_word(0x2), 0); }
 		bool SupportsSinglePrecisionFP() { return _bit(_word(0x2), 1); }
