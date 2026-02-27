@@ -1,5 +1,9 @@
 # Walden
 
+> I see young men, my townsmen, whose misfortune it is to have inherited farms, houses, barns, cattle, and farming tools; for these are more easily acquired than got rid of. Better if they had been born in the open pasture and suckled by a wolf, that they might have seen with clearer eyes what field they were called to labor in.
+
+&mdash; Henry David Thoreau, *Walden*
+
 ## What is this?
 
 The goal here is to build a **Plan 9**-*inspired*, *non-POSIX*, *single-user*, *microkernel-based*, *LoongArch64-only* opinionated operating system.
