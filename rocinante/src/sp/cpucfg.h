@@ -303,7 +303,7 @@ class CPUCFG final {
 		 * That is, the physical address space supported by the CPU is 2^(PALEN) bytes.
 		 * This returns PALEN-1, as defined in the ISA spec, because the CPUCFG instruction encodes it that way for some reason.
 		 * 
-		 * @return uint32_t 
+		 * @return std::uint32_t
 		 */
 		std::uint32_t PALENMinus1() { return _bits(_word(0x1), 11, 4); }
 
@@ -312,7 +312,7 @@ class CPUCFG final {
 		 * That is, the virtual address space supported by the CPU is 2^(VALEN) bytes.
 		 * This returns VALEN-1, as defined in the ISA spec, because the CPUCFG instruction encodes it that way for some reason.
 		 * 
-		 * @return uint32_t 
+		 * @return std::uint32_t
 		 */
 		std::uint32_t VALENMinus1() { return _bits(_word(0x1), 19, 12); }
 
@@ -321,7 +321,7 @@ class CPUCFG final {
 		 * I.e., the size of the physical address space supported by the CPU is 2^(PhysicalAddressBits()) bytes.
 		 * This actually just calls PALENMinus1() + 1 for convenience
 		 * 
-		 * @return uint32_t 
+		 * @return std::uint32_t
 		 */
 		std::uint32_t PhysicalAddressBits() { return PALENMinus1() + 1; }
 
@@ -330,7 +330,7 @@ class CPUCFG final {
 		 * I.e., the size of the virtual address space supported by the CPU is 2^(VirtualAddressBits()) bytes.
 		 * This actually just calls VALENMinus1() + 1 for convenience
 		 * 
-		 * @return uint32_t 
+		 * @return std::uint32_t
 		 */
 		std::uint32_t VirtualAddressBits() { return VALENMinus1() + 1; }
 
