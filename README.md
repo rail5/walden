@@ -12,7 +12,7 @@ Our security model is "protect the user from processes & processes from each oth
 
 I feel that the "multi-user" concept is an archaic abstraction we inherited from 1970s time-sharing systems, and that most modern devices are *in fact* single-user systems. We then shoehorn contemporary security models on top of this ill-fitting "multi-user" abstraction (e.g., process daemons running as special "users" for least-privilege, even though those "users" don't represent real people).
 
-### Plan-9 inspired?
+### Plan 9-inspired?
 
 I feel that *namespaces* are a good starting point to develop an alternative security model if we're getting rid of "users." Plus, I just think it's neat.
 
