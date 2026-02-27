@@ -48,43 +48,43 @@ namespace TimerConfiguration {
 
 static inline std::uint64_t ReadCurrentModeInformation() {
 	std::uint64_t value;
-	asm volatile("csrrd %0, 0x0" : "=r"(value));
+	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(Csr::CurrentModeInformation));
 	return value;
 }
 
 static inline void WriteCurrentModeInformation(std::uint64_t value) {
-	asm volatile("csrwr %0, 0x0" :: "r"(value));
+	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::CurrentModeInformation));
 }
 
 static inline std::uint32_t ReadExceptionConfiguration() {
 	std::uint64_t value;
-	asm volatile("csrrd %0, 0x4" : "=r"(value));
+	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(Csr::ExceptionConfiguration));
 	return static_cast<std::uint32_t>(value);
 }
 
 static inline void WriteExceptionConfiguration(std::uint32_t value) {
-	asm volatile("csrwr %0, 0x4" :: "r"(value));
+	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::ExceptionConfiguration));
 }
 
 static inline void WriteExceptionEntryAddress(std::uint64_t value) {
-	asm volatile("csrwr %0, 0xc" :: "r"(value));
+	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::ExceptionEntryAddress));
 }
 
 static inline void WriteTlbRefillEntryAddress(std::uint64_t value) {
-	asm volatile("csrwr %0, 0x88" :: "r"(value));
+	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::TlbRefillEntryAddress));
 }
 
 static inline void WriteMachineErrorEntryAddress(std::uint64_t value) {
-	asm volatile("csrwr %0, 0x93" :: "r"(value));
+	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::MachineErrorEntryAddress));
 }
 
 static inline void WriteTimerConfiguration(std::uint64_t value) {
-	asm volatile("csrwr %0, 0x41" :: "r"(value));
+	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::TimerConfiguration));
 }
 
 static inline void ClearPendingTimerInterruptInCsr() {
 	// TINTCLR.TI is bit 0. Writing 1 clears the pending timer interrupt.
-	asm volatile("csrwr %0, 0x44" :: "r"(1ull));
+	asm volatile("csrwr %0, %1" :: "r"(1ull), "i"(Csr::TimerInterruptClear));
 }
 
 extern "C" void __exception_entry();
