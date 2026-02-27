@@ -28,7 +28,7 @@ namespace Rocinante {
  */
 class CPUCFG final {
 	public:
-		enum class Architecture : uint8_t {
+		enum class Architecture : std::uint8_t {
 			SimplifiedLA32 = 0,
 			LA32 = 1,
 			LA64 = 2,
@@ -36,27 +36,27 @@ class CPUCFG final {
 		};
 
 		struct CacheGeometry final {
-			uint16_t WaysMinus1;
-			uint8_t IndexLog2;
-			uint8_t LineSizeLog2;
+			std::uint16_t WaysMinus1;
+			std::uint8_t IndexLog2;
+			std::uint8_t LineSizeLog2;
 
-			constexpr uint32_t Ways() const { return static_cast<uint32_t>(WaysMinus1) + 1; }
-			constexpr uint32_t SetsPerWay() const { return 1u << IndexLog2; }
-			constexpr uint32_t LineSizeBytes() const { return 1u << LineSizeLog2; }
+			constexpr std::uint32_t Ways() const { return static_cast<std::uint32_t>(WaysMinus1) + 1; }
+			constexpr std::uint32_t SetsPerWay() const { return 1u << IndexLog2; }
+			constexpr std::uint32_t LineSizeBytes() const { return 1u << LineSizeLog2; }
 		};
 	private:
-		static constexpr bool _bit(uint32_t value, uint32_t bit_index) {
+		static constexpr bool _bit(std::uint32_t value, std::uint32_t bit_index) {
 			return (value >> bit_index) & 0x1u;
 		}
 
-		static constexpr uint32_t _bits(uint32_t value, uint32_t high, uint32_t low) {
-			const uint32_t width = (high - low) + 1;
-			const uint64_t mask = (width >= 32) ? 0xFFFF'FFFFull : ((1ull << width) - 1ull);
-			return static_cast<uint32_t>((static_cast<uint64_t>(value) >> low) & mask);
+		static constexpr std::uint32_t _bits(std::uint32_t value, std::uint32_t high, std::uint32_t low) {
+			const std::uint32_t width = (high - low) + 1;
+			const std::uint64_t mask = (width >= 32) ? 0xFFFF'FFFFull : ((1ull << width) - 1ull);
+			return static_cast<std::uint32_t>((static_cast<std::uint64_t>(value) >> low) & mask);
 		}
 
-		static uint32_t _read_word(uint32_t word_number) {
-			uint32_t value;
+		static std::uint32_t _read_word(std::uint32_t word_number) {
+			std::uint32_t value;
 			asm volatile(
 				"cpucfg %0, %1"
 				: "=r"(value)
@@ -65,7 +65,7 @@ class CPUCFG final {
 			return value;
 		}
 
-		Rocinante::Optional<uint32_t>* _word_slot(uint32_t word_number) {
+		Rocinante::Optional<std::uint32_t>* _word_slot(std::uint32_t word_number) {
 			switch (word_number) {
 				case 0x0:
 					return &m_word0;
@@ -96,15 +96,15 @@ class CPUCFG final {
 			}
 		}
 
-		uint32_t _load_word(uint32_t word_number) {
-			const uint32_t value = _read_word(word_number);
+		std::uint32_t _load_word(std::uint32_t word_number) {
+			const std::uint32_t value = _read_word(word_number);
 			if (auto* slot = _word_slot(word_number)) {
 				slot->emplace(value);
 			}
 			return value;
 		}
 
-		uint32_t _word(uint32_t word_number) {
+		std::uint32_t _word(std::uint32_t word_number) {
 			if (auto* slot = _word_slot(word_number)) {
 				if (slot->has_value()) return slot->value();
 			}
@@ -116,7 +116,7 @@ class CPUCFG final {
 		 *
 		 * - Bits 31:0: PRID: Processor Identity
 		 */
-		Rocinante::Optional<uint32_t> m_word0;
+		Rocinante::Optional<std::uint32_t> m_word0;
 		
 		/**
 		 * @brief Word number 0x1:
@@ -133,7 +133,7 @@ class CPUCFG final {
 		 * - Bit 25: CRC: 1 = support for CRC instruction (meaning: info such as 'Loongson3A5000 @ 2.5GHz'), 0 = no support for CRC instruction
 		 * - Bit 26: MSGINT: 1 = external interrupt uses the "message interrupt" mode, 0 = external interrupt uses the "level interrupt line mode"
 		 */
-		Rocinante::Optional<uint32_t> m_word1;
+		Rocinante::Optional<std::uint32_t> m_word1;
 
 		/**
 		 * @brief Word number 0x2: ISA feature flags
@@ -162,7 +162,7 @@ class CPUCFG final {
 		 * - Bit 29: LLACQ_SCREL: 1 indicates support for LLACQ.{W/D}, SCREL.{W/D}
 		 * - Bit 30: SCQ: 1 indicates support for SC.Q
 		 */
-		Rocinante::Optional<uint32_t> m_word2;
+		Rocinante::Optional<std::uint32_t> m_word2;
 
 		/**
 		 * @brief Word number 0x3: MMU/page-walk and memory ordering feature flags
@@ -181,20 +181,20 @@ class CPUCFG final {
 		 * - Bit 17: DBAR_hints: 1 indicates non-0 DBAR values implemented per recommended manual meaning
 		 * - Bit 23: LD_SEQ_SA: 1 indicates hardware guarantees sequential execution of loads at same address
 		 */
-		Rocinante::Optional<uint32_t> m_word3;
+		Rocinante::Optional<std::uint32_t> m_word3;
 
 		/**
 		 * @brief Word number 0x4: Constant frequency counter crystal frequency
 		 * - Bits 31:0: CC_FREQ: constant frequency timer and the crystal frequency corresponding to the timer clock
 		 */
-		Rocinante::Optional<uint32_t> m_word4;
+		Rocinante::Optional<std::uint32_t> m_word4;
 
 		/**
 		 * @brief Word number 0x5: Constant frequency counter clock multiplication/division factors
 		 * - Bits 15:0: CC_MUL: constant frequency timer clock multiplication factor
 		 * - Bits 31:16: CC_DIV: constant frequency timer clock division coefficient
 		 */
-		Rocinante::Optional<uint32_t> m_word5;
+		Rocinante::Optional<std::uint32_t> m_word5;
 
 		/**
 		 * @brief Word number 0x6: Performance monitor configuration
@@ -204,7 +204,7 @@ class CPUCFG final {
 		 * - Bits 13:8: PMBITS: number of bits of a performance monitor minus 1
 		 * - Bit 14: UPM: 1 indicates support for reading performance counter in user mode
 		 */
-		Rocinante::Optional<uint32_t> m_word6;
+		Rocinante::Optional<std::uint32_t> m_word6;
 
 		/**
 		 * @brief Word number 0x10: Cache presence/relationship flags
@@ -226,7 +226,7 @@ class CPUCFG final {
 		 * - Bit 15: L3 D Private: 1 indicates L3 data cache is private per core
 		 * - Bit 16: L3 D Inclusive: 1 indicates L3 data cache inclusive of lower levels
 		 */
-		Rocinante::Optional<uint32_t> m_word10;
+		Rocinante::Optional<std::uint32_t> m_word10;
 
 		/**
 		 * @brief Word number 0x11: Cache geometry for cache corresponding to L1 IU_Present (word 0x10 bit 0)
@@ -235,7 +235,7 @@ class CPUCFG final {
 		 * - Bits 23:16: Index-log2: log2(number of cache rows per way)
 		 * - Bits 30:24: Linesize-log2: log2(cache line size in bytes)
 		 */
-		Rocinante::Optional<uint32_t> m_word11;
+		Rocinante::Optional<std::uint32_t> m_word11;
 
 		/**
 		 * @brief Word number 0x12: Cache geometry for cache corresponding to L1 D Present (word 0x10 bit 2)
@@ -244,7 +244,7 @@ class CPUCFG final {
 		 * - Bits 23:16: Index-log2: log2(number of cache rows per way)
 		 * - Bits 30:24: Linesize-log2: log2(cache line size in bytes)
 		 */
-		Rocinante::Optional<uint32_t> m_word12;
+		Rocinante::Optional<std::uint32_t> m_word12;
 
 		/**
 		 * @brief Word number 0x13: Cache geometry for cache corresponding to L2 IU Present (word 0x10 bit 3)
@@ -253,7 +253,7 @@ class CPUCFG final {
 		 * - Bits 23:16: Index-log2: log2(number of cache rows per way)
 		 * - Bits 30:24: Linesize-log2: log2(cache line size in bytes)
 		 */
-		Rocinante::Optional<uint32_t> m_word13;
+		Rocinante::Optional<std::uint32_t> m_word13;
 
 		/**
 		 * @brief Word number 0x14: Cache geometry for cache corresponding to L3 IU Present (word 0x10 bit 10)
@@ -262,14 +262,14 @@ class CPUCFG final {
 		 * - Bits 23:16: Index-log2: log2(number of cache rows per way)
 		 * - Bits 30:24: Linesize-log2: log2(cache line size in bytes)
 		 */
-		Rocinante::Optional<uint32_t> m_word14;
+		Rocinante::Optional<std::uint32_t> m_word14;
 
 	public:
 		CPUCFG() = default;
 
-		uint32_t Word(uint32_t word_number) { return _word(word_number); }
+		std::uint32_t Word(std::uint32_t word_number) { return _word(word_number); }
 
-		uint32_t ProcessorID() {
+		std::uint32_t ProcessorID() {
 			return _word(0x0);
 		}
 
@@ -305,7 +305,7 @@ class CPUCFG final {
 		 * 
 		 * @return uint32_t 
 		 */
-		uint32_t PALENMinus1() { return _bits(_word(0x1), 11, 4); }
+		std::uint32_t PALENMinus1() { return _bits(_word(0x1), 11, 4); }
 
 		/**
 		 * @brief VALEN is the number of virtual address bits supported by the CPU.
@@ -314,7 +314,7 @@ class CPUCFG final {
 		 * 
 		 * @return uint32_t 
 		 */
-		uint32_t VALENMinus1() { return _bits(_word(0x1), 19, 12); }
+		std::uint32_t VALENMinus1() { return _bits(_word(0x1), 19, 12); }
 
 		/**
 		 * @brief Returns the number of physical address bits supported by the CPU.
@@ -323,7 +323,7 @@ class CPUCFG final {
 		 * 
 		 * @return uint32_t 
 		 */
-		uint32_t PhysicalAddressBits() { return PALENMinus1() + 1; }
+		std::uint32_t PhysicalAddressBits() { return PALENMinus1() + 1; }
 
 		/**
 		 * @brief Returns the number of virtual address bits supported by the CPU.
@@ -332,7 +332,7 @@ class CPUCFG final {
 		 * 
 		 * @return uint32_t 
 		 */
-		uint32_t VirtualAddressBits() { return VALENMinus1() + 1; }
+		std::uint32_t VirtualAddressBits() { return VALENMinus1() + 1; }
 
 		/**
 		 * @brief Whether the CPU supports unaligned memory access
@@ -400,15 +400,15 @@ class CPUCFG final {
 		bool SupportsFP() { return _bit(_word(0x2), 0); }
 		bool SupportsSinglePrecisionFP() { return _bit(_word(0x2), 1); }
 		bool SupportsDoublePrecisionFP() { return _bit(_word(0x2), 2); }
-		uint32_t FPVersion() { return _bits(_word(0x2), 5, 3); }
+		std::uint32_t FPVersion() { return _bits(_word(0x2), 5, 3); }
 		bool SupportsLSX() { return _bit(_word(0x2), 6); }
 		bool SupportsLASX() { return _bit(_word(0x2), 7); }
 		bool SupportsComplexVector() { return _bit(_word(0x2), 8); }
 		bool SupportsCryptoVector() { return _bit(_word(0x2), 9); }
 		bool SupportsVirtualizationExtension() { return _bit(_word(0x2), 10); }
-		uint32_t VirtualizationVersion() { return _bits(_word(0x2), 13, 11); }
+		std::uint32_t VirtualizationVersion() { return _bits(_word(0x2), 13, 11); }
 		bool SupportsConstantFrequencyCounterTimer() { return _bit(_word(0x2), 14); }
-		uint32_t ConstantFrequencyCounterTimerVersion() { return _bits(_word(0x2), 17, 15); }
+		std::uint32_t ConstantFrequencyCounterTimerVersion() { return _bits(_word(0x2), 17, 15); }
 		bool SupportsX86BinaryTranslation() { return _bit(_word(0x2), 18); }
 		bool SupportsARMBinaryTranslation() { return _bit(_word(0x2), 19); }
 		bool SupportsMIPSBinaryTranslation() { return _bit(_word(0x2), 20); }
@@ -430,21 +430,21 @@ class CPUCFG final {
 		bool SupportsLLAutomaticWithDBAR() { return _bit(_word(0x3), 5); }
 		bool HardwareMaintainsITLBAndTLBConsistency() { return _bit(_word(0x3), 6); }
 		bool HardwareMaintainsICacheAndDCacheConsistencyInCore() { return _bit(_word(0x3), 7); }
-		uint32_t PageWalkMaxDirectoryLevels() { return _bits(_word(0x3), 10, 8); }
+		std::uint32_t PageWalkMaxDirectoryLevels() { return _bits(_word(0x3), 10, 8); }
 		bool PageWalkFillsTLBHalfOnLargePage() { return _bit(_word(0x3), 11); }
 		bool SupportsShorteningVirtualAddressRange() { return _bit(_word(0x3), 12); }
-		uint32_t RVAMAXMinus1() { return _bits(_word(0x3), 16, 13); }
+		std::uint32_t RVAMAXMinus1() { return _bits(_word(0x3), 16, 13); }
 		bool DBARNonZeroHintsImplementedAsRecommended() { return _bit(_word(0x3), 17); }
 		bool HardwareGuaranteesSequentialLoadsSameAddress() { return _bit(_word(0x3), 23); }
 
-		uint32_t ConstantFrequencyCounterCrystalFrequency() { return _word(0x4); }
-		uint32_t ConstantFrequencyCounterMul() { return _bits(_word(0x5), 15, 0); }
-		uint32_t ConstantFrequencyCounterDiv() { return _bits(_word(0x5), 31, 16); }
+		std::uint32_t ConstantFrequencyCounterCrystalFrequency() { return _word(0x4); }
+		std::uint32_t ConstantFrequencyCounterMul() { return _bits(_word(0x5), 15, 0); }
+		std::uint32_t ConstantFrequencyCounterDiv() { return _bits(_word(0x5), 31, 16); }
 
 		bool SupportsPerformanceMonitor() { return _bit(_word(0x6), 0); }
-		uint32_t PerformanceMonitorEventVersion() { return _bits(_word(0x6), 3, 1); }
-		uint32_t PerformanceMonitorCountMinus1() { return _bits(_word(0x6), 7, 4); }
-		uint32_t PerformanceMonitorBitsMinus1() { return _bits(_word(0x6), 13, 8); }
+		std::uint32_t PerformanceMonitorEventVersion() { return _bits(_word(0x6), 3, 1); }
+		std::uint32_t PerformanceMonitorCountMinus1() { return _bits(_word(0x6), 7, 4); }
+		std::uint32_t PerformanceMonitorBitsMinus1() { return _bits(_word(0x6), 13, 8); }
 		bool UserModePerformanceMonitorAccess() { return _bit(_word(0x6), 14); }
 
 		bool L1IUPresent() { return _bit(_word(0x10), 0); }
@@ -467,41 +467,41 @@ class CPUCFG final {
 
 		Rocinante::Optional<CacheGeometry> L1IUGeometry() {
 			if (!L1IUPresent()) return Rocinante::nullopt;
-			const uint32_t w = _word(0x11);
+			const std::uint32_t w = _word(0x11);
 			return CacheGeometry{
-				.WaysMinus1 = static_cast<uint16_t>(_bits(w, 15, 0)),
-				.IndexLog2 = static_cast<uint8_t>(_bits(w, 23, 16)),
-				.LineSizeLog2 = static_cast<uint8_t>(_bits(w, 30, 24)),
+				.WaysMinus1 = static_cast<std::uint16_t>(_bits(w, 15, 0)),
+				.IndexLog2 = static_cast<std::uint8_t>(_bits(w, 23, 16)),
+				.LineSizeLog2 = static_cast<std::uint8_t>(_bits(w, 30, 24)),
 			};
 		}
 
 		Rocinante::Optional<CacheGeometry> L1DGeometry() {
 			if (!L1DPresent()) return Rocinante::nullopt;
-			const uint32_t w = _word(0x12);
+			const std::uint32_t w = _word(0x12);
 			return CacheGeometry{
-				.WaysMinus1 = static_cast<uint16_t>(_bits(w, 15, 0)),
-				.IndexLog2 = static_cast<uint8_t>(_bits(w, 23, 16)),
-				.LineSizeLog2 = static_cast<uint8_t>(_bits(w, 30, 24)),
+				.WaysMinus1 = static_cast<std::uint16_t>(_bits(w, 15, 0)),
+				.IndexLog2 = static_cast<std::uint8_t>(_bits(w, 23, 16)),
+				.LineSizeLog2 = static_cast<std::uint8_t>(_bits(w, 30, 24)),
 			};
 		}
 
 		Rocinante::Optional<CacheGeometry> L2IUGeometry() {
 			if (!L2IUPresent()) return Rocinante::nullopt;
-			const uint32_t w = _word(0x13);
+			const std::uint32_t w = _word(0x13);
 			return CacheGeometry{
-				.WaysMinus1 = static_cast<uint16_t>(_bits(w, 15, 0)),
-				.IndexLog2 = static_cast<uint8_t>(_bits(w, 23, 16)),
-				.LineSizeLog2 = static_cast<uint8_t>(_bits(w, 30, 24)),
+				.WaysMinus1 = static_cast<std::uint16_t>(_bits(w, 15, 0)),
+				.IndexLog2 = static_cast<std::uint8_t>(_bits(w, 23, 16)),
+				.LineSizeLog2 = static_cast<std::uint8_t>(_bits(w, 30, 24)),
 			};
 		}
 
 		Rocinante::Optional<CacheGeometry> L3IUGeometry() {
 			if (!L3IUPresent()) return Rocinante::nullopt;
-			const uint32_t w = _word(0x14);
+			const std::uint32_t w = _word(0x14);
 			return CacheGeometry{
-				.WaysMinus1 = static_cast<uint16_t>(_bits(w, 15, 0)),
-				.IndexLog2 = static_cast<uint8_t>(_bits(w, 23, 16)),
-				.LineSizeLog2 = static_cast<uint8_t>(_bits(w, 30, 24)),
+				.WaysMinus1 = static_cast<std::uint16_t>(_bits(w, 15, 0)),
+				.IndexLog2 = static_cast<std::uint8_t>(_bits(w, 23, 16)),
+				.LineSizeLog2 = static_cast<std::uint8_t>(_bits(w, 30, 24)),
 			};
 		}
 };

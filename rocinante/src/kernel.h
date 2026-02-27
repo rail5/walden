@@ -17,8 +17,8 @@ extern "C" {
 	 * 
 	 */
 	[[noreturn]] void kernel_main(
-		uint64_t is_uefi_compliant_bootenv /* a0 */,
-		uint64_t kernel_cmdline_ptr /* a1 */,
-		uint64_t efi_system_table_ptr /* a2 */
+		std::uint64_t is_uefi_compliant_bootenv /* a0 */,
+		std::uint64_t kernel_cmdline_ptr /* a1 */,
+		std::uint64_t efi_system_table_ptr /* a2 */
 	);
 }

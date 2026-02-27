@@ -45,7 +45,9 @@ struct TrapFrame final {
 	std::uint64_t exception_configuration;
 };
 
-static_assert(sizeof(TrapFrame) == 304);
+// ABI contract with the assembly trap entry stub (rocinante/src/asm/trap.S).
+static constexpr std::size_t kTrapFrameSizeBytes = 304;
+static_assert(sizeof(TrapFrame) == kTrapFrameSizeBytes);
 
 namespace Trap {
 
@@ -88,18 +90,24 @@ void ClearTimerInterrupt();
 
 // Helpers for decoding CSR.ESTAT (Exception Status).
 constexpr std::uint64_t ExceptionCodeFromExceptionStatus(std::uint64_t exception_status) {
-	// ESTAT.EXC is bits [21:16].
-	return (exception_status >> 16) & 0x3fu;
+	// LoongArch CSR.ESTAT bitfield layout (privileged spec):
+	// - ESTAT.EXC is bits [21:16]
+	static constexpr std::uint64_t kExceptionCodeShift = 16;
+	static constexpr std::uint64_t kExceptionCodeMask = 0x3f;
+	return (exception_status >> kExceptionCodeShift) & kExceptionCodeMask;
 }
 
 constexpr std::uint64_t ExceptionSubCodeFromExceptionStatus(std::uint64_t exception_status) {
-	// ESTAT.ESUBCODE is bits [30:22].
-	return (exception_status >> 22) & 0x1ffu;
+	// - ESTAT.ESUBCODE is bits [30:22]
+	static constexpr std::uint64_t kExceptionSubCodeShift = 22;
+	static constexpr std::uint64_t kExceptionSubCodeMask = 0x1ff;
+	return (exception_status >> kExceptionSubCodeShift) & kExceptionSubCodeMask;
 }
 
 constexpr std::uint64_t InterruptStatusFromExceptionStatus(std::uint64_t exception_status) {
-	// ESTAT.IS is bits [14:0].
-	return exception_status & 0x7fffu;
+	// - ESTAT.IS is bits [14:0]
+	static constexpr std::uint64_t kInterruptStatusMask = 0x7fff;
+	return exception_status & kInterruptStatusMask;
 }
 
 } // namespace Trap

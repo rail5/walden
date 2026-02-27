@@ -13,7 +13,7 @@
 
 namespace {
 
-constexpr uintptr_t UART_BASE = 0x1fe001e0UL; // QEMU LoongArch virt: VIRT_UART_BASE address
+constexpr std::uintptr_t UART_BASE = 0x1fe001e0UL; // QEMU LoongArch virt: VIRT_UART_BASE address
 
 static constinit Rocinante::Uart16550 uart(UART_BASE);
 
@@ -94,7 +94,7 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	halt();
 }
 
-extern "C" [[noreturn]] void kernel_main(uint64_t is_uefi_compliant_bootenv, uint64_t kernel_cmdline_ptr, uint64_t efi_system_table_ptr) {
+extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv, std::uint64_t kernel_cmdline_ptr, std::uint64_t efi_system_table_ptr) {
 	Rocinante::Memory::InitEarly();
 	Rocinante::Trap::Initialize();
 
