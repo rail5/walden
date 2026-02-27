@@ -30,7 +30,7 @@ Walden / Rocinante are compiled with the **C++23** standard with GNU extensions 
   - Avoid: `era`, `ecfg`, `Init()` (unless the scope already makes it unambiguous)
 - **Names should encode units.** If something is in ticks/bytes/pages, say so (e.g., `ticks`, `bytes`, `page_count`).
 - **Use fixed-width types for HW/ABI values:** `std::uint32_t`, `std::uint64_t`, `uintptr_t`.
-- **Keep formatting consistent with existing code.** The current codebase uses tabs for indentation.
+- **Keep formatting consistent with existing code.** The current codebase uses tabs for indentation and same-line braces.
 
 ## Magic Numbers Policy
 
