@@ -38,6 +38,20 @@ _start:
 
 .section .bss.stack, "aw", @nobits
 .align 16
+
+// Bootstrap stack used before we have any dynamic memory or per-CPU stacks.
+//
+// Why this exists:
+// - We need a valid stack before calling into any C++ code.
+// - Early bring-up code (UART prints, trap self-tests, etc.) should not depend
+//   on heap initialization.
+//
+// Why this size:
+// - 16 KiB is intentionally conservative for early bring-up.
+// - If we ever overflow this stack, we want it to be an obvious, easy-to-tune
+//   constant.
+.equ BOOTSTRAP_STACK_SIZE_BYTES, 16384
+
 stack_bottom:
-	.space 16384
+	.space BOOTSTRAP_STACK_SIZE_BYTES
 stack_top:
