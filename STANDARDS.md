@@ -75,6 +75,11 @@ When you are tempted to write a literal constant:
 - Self-tests should be **build-time gated** (macros) and **off by default** unless they are intended to always run.
 - Prefer tests that fail loudly and diagnostically over tests that silently continue.
 
+### In-kernel tests (QEMU)
+
+- Build test kernel and run in QEMU: `make -C rocinante test`
+- Expected behavior: per-test PASS/FAIL lines over UART and then a stable summary line (`ALL TESTS PASSED` or `TESTS FAILED`) before halting.
+
 ## Review Checklist (quick)
 
 Before sending a change:

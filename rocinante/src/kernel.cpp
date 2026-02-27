@@ -8,8 +8,13 @@
 #include <src/memory/memory.h>
 #include <src/sp/cpucfg.h>
 #include <src/sp/uart16550.h>
+#include <src/sp/mmio.h>
 #include <src/helpers/optional.h>
 #include <src/trap.h>
+
+#if defined(ROCINANTE_TESTS)
+#include <src/testing/test.h>
+#endif
 
 namespace {
 
@@ -33,6 +38,25 @@ static inline std::uint64_t rdtime_d() {
 	}
 }
 
+[[noreturn]] static inline void shutdown() {
+	// QEMU LoongArch64 virt poweroff is wired up as a "syscon-poweroff" device.
+	// The virt machine advertises this via its DTB:
+	// - /poweroff compatible = "syscon-poweroff"
+	// - regmap -> syscon at 0x100e001c (reg-io-width = 1)
+	// - offset = 0, value = 0x34
+	// Writing that byte triggers a QEMU shutdown event, and QEMU exits by default
+	// (-action shutdown=poweroff).
+	constexpr std::uintptr_t kSysconBase = 0x100e001cUL;
+	constexpr std::uintptr_t kPoweroffOffset = 0;
+	constexpr std::uint8_t kPoweroffValue = 0x34;
+
+	Rocinante::MMIO<8>::write(kSysconBase + kPoweroffOffset, kPoweroffValue);
+	asm volatile("dbar 0" ::: "memory");
+
+	// If QEMU ignores the poweroff request, just stop.
+	halt();
+}
+
 } // namespace
 
 extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
@@ -42,6 +66,12 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 		Rocinante::Trap::ExceptionSubCodeFromExceptionStatus(tf->exception_status);
 	const std::uint64_t interrupt_status =
 		Rocinante::Trap::InterruptStatusFromExceptionStatus(tf->exception_status);
+
+	#if defined(ROCINANTE_TESTS)
+	if (Rocinante::Testing::HandleTrap(tf, exception_code, exception_subcode, interrupt_status)) {
+		return;
+	}
+	#else
 
 	// LoongArch EXCCODE values (subset used for early bring-up).
 	constexpr std::uint64_t kExceptionCodeBreak = 0x0c;
@@ -74,6 +104,7 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 		tf->exception_return_address += 4;
 		return;
 	}
+	#endif
 
 	uart.puts("\n*** TRAP ***\n");
 	uart.puts("ERA:   ");
@@ -97,6 +128,16 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv, std::uint64_t kernel_cmdline_ptr, std::uint64_t efi_system_table_ptr) {
 	Rocinante::Memory::InitEarly();
 	Rocinante::Trap::Initialize();
+
+	#if defined(ROCINANTE_TESTS)
+	const int failed = Rocinante::Testing::RunAll(&uart);
+	if (failed == 0) {
+		uart.puts("\nALL TESTS PASSED\n");
+	} else {
+		uart.puts("\nTESTS FAILED\n");
+	}
+	shutdown();
+	#endif
 
 	auto& cpucfg = Rocinante::GetCPUCFG();
 

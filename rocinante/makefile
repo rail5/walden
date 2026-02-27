@@ -17,6 +17,9 @@ SP_OBJDIR  = $(BINDIR)/sp
 MEM_SRCDIR = $(SRCDIR)/memory
 MEM_OBJDIR = $(BINDIR)/memory
 
+TEST_SRCDIR = $(SRCDIR)/testing
+TEST_OBJDIR = $(BINDIR)/testing
+
 KERNEL_SRC = $(SRCDIR)/kernel.cpp
 KERNEL_OBJ = $(BINDIR)/kernel.o
 
@@ -36,6 +39,9 @@ SP_OBJS    = $(patsubst $(SP_SRCDIR)/%.cpp, $(SP_OBJDIR)/%.o, $(SP_SRCS))
 MEM_SRCS   = $(wildcard $(MEM_SRCDIR)/*.cpp)
 MEM_OBJS   = $(patsubst $(MEM_SRCDIR)/%.cpp, $(MEM_OBJDIR)/%.o, $(MEM_SRCS))
 
+TEST_SRCS  = $(wildcard $(TEST_SRCDIR)/*.cpp)
+TEST_OBJS  = $(patsubst $(TEST_SRCDIR)/%.cpp, $(TEST_OBJDIR)/%.o, $(TEST_SRCS))
+
 ALL_OBJS   = $(ASM_OBJS) $(KERNEL_OBJ) $(TRAP_OBJ) $(ABI_OBJ) $(SP_OBJS) $(MEM_OBJS)
 
 LINKER_LD  = $(ASM_SRCDIR)/linker.ld
@@ -49,6 +55,11 @@ LD         = $(CROSS)ld
 CFLAGS     = -ffreestanding -nostdlib -fno-asynchronous-unwind-tables -Wall -Wextra -O2 -I$(PROJECT_ROOT_DIRECTORY)
 CXXFLAGS   = $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++23
 LDFLAGS    = -T $(LINKER_LD) -nostdlib -s
+
+ifeq ($(ROCINANTE_TESTS),1)
+	CXXFLAGS += -DROCINANTE_TESTS
+	ALL_OBJS += $(TEST_OBJS)
+endif
 
 all: $(TARGET)
 
@@ -73,6 +84,10 @@ $(MEM_OBJDIR)/%.o: $(MEM_SRCDIR)/%.cpp
 	@mkdir -p $(MEM_OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(TEST_OBJDIR)/%.o: $(TEST_SRCDIR)/%.cpp
+	@mkdir -p $(TEST_OBJDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(KERNEL_OBJ): $(KERNEL_SRC)
 	@mkdir -p $(BINDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -94,4 +109,10 @@ run: $(TARGET)
 	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
 		-monitor none -kernel $<
 
-.PHONY: all check-toolchain clean run
+test:
+	@$(MAKE) -C $(PROJECT_ROOT_DIRECTORY) ROCINANTE_TESTS=1 MAKEFLAGS= clean all
+	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
+		-nographic -serial stdio -monitor none \
+		-kernel $(PROJECT_ROOT_DIRECTORY)/$(TARGET)
+
+.PHONY: all check-toolchain clean run test run-tests

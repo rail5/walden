@@ -12,6 +12,19 @@
 namespace Rocinante {
 
 /**
+ * @brief Backend for retrieving CPUCFG words.
+ *
+ * Production code uses the `cpucfg` instruction; tests can inject a fake
+ * backend that returns deterministic words.
+ */
+struct CPUCFGBackend final {
+	using ReadWordFn = std::uint32_t (*)(void* context, std::uint32_t word_number);
+
+	void* context;
+	ReadWordFn read_word;
+};
+
+/**
  * @brief The returned contents of the CPUCFG instruction as defined in the LoongArch64 v1.1 ISA specification.
  *
  * This class should not be instantiated by users.
@@ -45,6 +58,16 @@ class CPUCFG final {
 			constexpr std::uint32_t LineSizeBytes() const { return 1u << LineSizeLog2; }
 		};
 	private:
+		static std::uint32_t _read_word_via_instruction(void*, std::uint32_t word_number) {
+			std::uint32_t value;
+			asm volatile(
+				"cpucfg %0, %1"
+				: "=r"(value)
+				: "r"(word_number)
+			);
+			return value;
+		}
+
 		static constexpr bool _bit(std::uint32_t value, std::uint32_t bit_index) {
 			return (value >> bit_index) & 0x1u;
 		}
@@ -55,15 +78,8 @@ class CPUCFG final {
 			return static_cast<std::uint32_t>((static_cast<std::uint64_t>(value) >> low) & mask);
 		}
 
-		static std::uint32_t _read_word(std::uint32_t word_number) {
-			std::uint32_t value;
-			asm volatile(
-				"cpucfg %0, %1"
-				: "=r"(value)
-				: "r"(word_number)
-			);
-			return value;
-		}
+		CPUCFGBackend m_backend{nullptr, &_read_word_via_instruction};
+		std::uint64_t m_backend_read_count = 0;
 
 		Rocinante::Optional<std::uint32_t>* _word_slot(std::uint32_t word_number) {
 			switch (word_number) {
@@ -97,7 +113,8 @@ class CPUCFG final {
 		}
 
 		std::uint32_t _load_word(std::uint32_t word_number) {
-			const std::uint32_t value = _read_word(word_number);
+			m_backend_read_count++;
+			const std::uint32_t value = m_backend.read_word(m_backend.context, word_number);
 			if (auto* slot = _word_slot(word_number)) {
 				slot->emplace(value);
 			}
@@ -266,6 +283,43 @@ class CPUCFG final {
 
 	public:
 		CPUCFG() = default;
+
+		/**
+		 * @brief Replace the CPUCFG backend.
+		 *
+		 * This is intended for tests. Changing the backend invalidates any cached
+		 * words, so this call resets the cache.
+		 */
+		void SetBackend(CPUCFGBackend backend) {
+			m_backend = backend;
+			ResetCache();
+		}
+
+		/**
+		 * @brief Clears any cached CPUCFG words.
+		 *
+		 * This is useful for tests and for validating caching behavior.
+		 */
+		void ResetCache() {
+			m_word0.reset();
+			m_word1.reset();
+			m_word2.reset();
+			m_word3.reset();
+			m_word4.reset();
+			m_word5.reset();
+			m_word6.reset();
+			m_word10.reset();
+			m_word11.reset();
+			m_word12.reset();
+			m_word13.reset();
+			m_word14.reset();
+			m_backend_read_count = 0;
+		}
+
+		/**
+		 * @brief Returns how many backend word reads have occurred since ResetCache().
+		 */
+		std::uint64_t BackendReadCount() const { return m_backend_read_count; }
 
 		std::uint32_t Word(std::uint32_t word_number) { return _word(word_number); }
 
