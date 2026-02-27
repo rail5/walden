@@ -13,33 +13,33 @@ namespace Rocinante {
 
 class Uart16550 final {
 	private:
-		uintptr_t m_base_address;
+		std::uintptr_t m_base_address;
 
 		// Offsets of the 16550 registers from the base address
-		static constexpr uintptr_t OFFSET_RECEIVER_BUFFER = 0x00; // Read-only, used to read received data
-		static constexpr uintptr_t OFFSET_TRANSMIT_HOLDING = 0x00; // Write a byte here to transmit it
-		static constexpr uintptr_t OFFSET_INTERRUPT_ENABLE = 0x01; // Interrupt enable bits
-		static constexpr uintptr_t OFFSET_INTERRUPT_IDENTIFICATION = 0x02; // Read-only, tells you which interrupt(s) are pending
-		static constexpr uintptr_t OFFSET_LINE_STATUS = 0x5; // Read-only, contains bits indicating if the transmitter is empty, if data is available to read, etc.
+		static constexpr std::uintptr_t OFFSET_RECEIVER_BUFFER = 0x00; // Read-only, used to read received data
+		static constexpr std::uintptr_t OFFSET_TRANSMIT_HOLDING = 0x00; // Write a byte here to transmit it
+		static constexpr std::uintptr_t OFFSET_INTERRUPT_ENABLE = 0x01; // Interrupt enable bits
+		static constexpr std::uintptr_t OFFSET_INTERRUPT_IDENTIFICATION = 0x02; // Read-only, tells you which interrupt(s) are pending
+		static constexpr std::uintptr_t OFFSET_LINE_STATUS = 0x05; // Read-only, contains bits indicating if the transmitter is empty, if data is available to read, etc.
 
 		// Line status flags
-		static constexpr uint8_t LINE_STATUS_DATA_READY = 0x01; // Set if there is data available to read
-		static constexpr uint8_t LINE_STATUS_THR_EMPTY = 0x20; // Set if the transmitter holding register is empty and ready for a new byte to transmit
+		static constexpr std::uint8_t LINE_STATUS_DATA_READY = 0x01; // Set if there is data available to read
+		static constexpr std::uint8_t LINE_STATUS_THR_EMPTY = 0x20; // Set if the transmitter holding register is empty and ready for a new byte to transmit
 
 		// Interrupt enable flag
-		static constexpr uint8_t INTERRUPT_ENABLE_RECEIVED_DATA_AVAILABLE = 0x01; // If set, an interrupt will be triggered when data is available to read
+		static constexpr std::uint8_t INTERRUPT_ENABLE_RECEIVED_DATA_AVAILABLE = 0x01; // If set, an interrupt will be triggered when data is available to read
 
 		// Receive ring buffer for incoming data
-		static constexpr uint32_t RECEIVE_BUFFER_SIZE = 1024;
-		static constexpr uint32_t RECEIVE_BUFFER_MASK = RECEIVE_BUFFER_SIZE - 1;
+		static constexpr std::uint32_t RECEIVE_BUFFER_SIZE = 1024;
+		static constexpr std::uint32_t RECEIVE_BUFFER_MASK = RECEIVE_BUFFER_SIZE - 1;
 		static_assert((RECEIVE_BUFFER_SIZE & RECEIVE_BUFFER_MASK) == 0, "Receive buffer size must be a power of 2");
 
-		mutable volatile uint32_t m_receive_buffer_head = 0;
-		mutable volatile uint32_t m_receive_buffer_tail = 0;
-		mutable uint8_t m_receive_buffer[RECEIVE_BUFFER_SIZE]{};
+		mutable volatile std::uint32_t m_receive_buffer_head = 0;
+		mutable volatile std::uint32_t m_receive_buffer_tail = 0;
+		mutable std::uint8_t m_receive_buffer[RECEIVE_BUFFER_SIZE]{};
 	
 	public:
-		constexpr explicit Uart16550(uintptr_t base_address) : m_base_address(base_address) {}
+		constexpr explicit Uart16550(std::uintptr_t base_address) : m_base_address(base_address) {}
 
 		Uart16550(const Uart16550&) = delete;
 		Uart16550& operator=(const Uart16550&) = delete;
@@ -47,7 +47,7 @@ class Uart16550 final {
 		void putc(char c) const;
 		void puts(const char* str) const;
 
-		enum class IrqCause : uint8_t {
+		enum class IrqCause : std::uint8_t {
 			None,
 			ModemStatus,
 			TransmitterHoldingRegisterEmpty,
@@ -60,19 +60,29 @@ class Uart16550 final {
 			Unknown
 		};
 
-		uint8_t read_iir() const;
-		static constexpr IrqCause decode_iir(uint8_t iir) {
-			// Bit 0 of the IIR is set to 0 if an interrupt is pending, and 1 if no interrupts are pending.
-			// So if bit 0 is 1, we can immediately return IrqCause::None without looking at the other bits.
-			if ((iir & 0x01) != 0) return IrqCause::None;
+		std::uint8_t read_iir() const;
+		static constexpr IrqCause decode_iir(std::uint8_t interrupt_identification_register) {
+			// Spec-defined constants from the 16550 UART Interrupt Identification Register (IIR).
+			// IIR[0] == 1 means no interrupt pending; IIR[3:1] encodes the highest-priority pending IRQ.
+			static constexpr std::uint8_t kIirNoInterruptPendingBit = 0x01;
+			static constexpr std::uint8_t kIirCauseShift = 1;
+			static constexpr std::uint8_t kIirCauseMask = 0x07;
+			static constexpr std::uint8_t kIirCauseModemStatus = 0x0;
+			static constexpr std::uint8_t kIirCauseTransmitterHoldingRegisterEmpty = 0x1;
+			static constexpr std::uint8_t kIirCauseReceivedDataAvailable = 0x2;
+			static constexpr std::uint8_t kIirCauseReceiverLineStatus = 0x3;
+			static constexpr std::uint8_t kIirCauseCharacterTimeout = 0x6;
 
-			// Bits 3:1 of the IIR indicate the highest priority pending interrupt, if any.
-			switch ((iir >> 1) & 0x07) {
-				case 0x0: return IrqCause::ModemStatus;
-				case 0x1: return IrqCause::TransmitterHoldingRegisterEmpty;
-				case 0x2: return IrqCause::ReceivedDataAvailable;
-				case 0x3: return IrqCause::ReceiverLineStatus;
-				case 0x6: return IrqCause::CharacterTimeout;
+			if ((interrupt_identification_register & kIirNoInterruptPendingBit) != 0) return IrqCause::None;
+
+			const std::uint8_t cause =
+				(interrupt_identification_register >> kIirCauseShift) & kIirCauseMask;
+			switch (cause) {
+				case kIirCauseModemStatus: return IrqCause::ModemStatus;
+				case kIirCauseTransmitterHoldingRegisterEmpty: return IrqCause::TransmitterHoldingRegisterEmpty;
+				case kIirCauseReceivedDataAvailable: return IrqCause::ReceivedDataAvailable;
+				case kIirCauseReceiverLineStatus: return IrqCause::ReceiverLineStatus;
+				case kIirCauseCharacterTimeout: return IrqCause::CharacterTimeout;
 				default: return IrqCause::Unknown;
 			}
 		}

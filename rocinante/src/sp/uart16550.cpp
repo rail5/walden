@@ -13,14 +13,14 @@ void Rocinante::Uart16550::putc(char c) const {
 		// Wait for the transmitter holding register to be empty before writing the next byte
 	}
 
-	MMIO<8>::write(m_base_address + OFFSET_TRANSMIT_HOLDING, static_cast<uint8_t>(c));
+	MMIO<8>::write(m_base_address + OFFSET_TRANSMIT_HOLDING, static_cast<std::uint8_t>(c));
 }
 
 void Rocinante::Uart16550::puts(const char* str) const {
 	while (*str) putc(*str++);
 }
 
-uint8_t Rocinante::Uart16550::read_iir() const {
+std::uint8_t Rocinante::Uart16550::read_iir() const {
 	return MMIO<8>::read(m_base_address + OFFSET_INTERRUPT_IDENTIFICATION);
 }
 
@@ -36,9 +36,9 @@ void Rocinante::Uart16550::irq_rx_drain() const {
 	// Drain any pending RX bytes and enqueue them
 	// This is safe to call from an IRQ context
 	while (rx_ready()) {
-		const uint8_t byte = MMIO<8>::read(m_base_address + OFFSET_RECEIVER_BUFFER);
-		const uint32_t head = m_receive_buffer_head;
-		const uint32_t next = (head + 1U) & RECEIVE_BUFFER_MASK;
+		const std::uint8_t byte = MMIO<8>::read(m_base_address + OFFSET_RECEIVER_BUFFER);
+		const std::uint32_t head = m_receive_buffer_head;
+		const std::uint32_t next = (head + 1U) & RECEIVE_BUFFER_MASK;
 		if (next != m_receive_buffer_tail) { // Check for buffer overflow; if the buffer is full, we just drop the byte on the floor
 			m_receive_buffer[head] = byte;
 			m_receive_buffer_head = next;
@@ -47,7 +47,7 @@ void Rocinante::Uart16550::irq_rx_drain() const {
 }
 
 bool Rocinante::Uart16550::irq_try_getc(char* out) const {
-	const uint32_t tail = m_receive_buffer_tail;
+	const std::uint32_t tail = m_receive_buffer_tail;
 	if (tail == m_receive_buffer_head) return false; // Buffer is empty
 
 	*out = static_cast<char>(m_receive_buffer[tail]);
