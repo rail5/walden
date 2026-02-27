@@ -20,6 +20,9 @@ MEM_OBJDIR = $(BINDIR)/memory
 KERNEL_SRC = $(SRCDIR)/kernel.cpp
 KERNEL_OBJ = $(BINDIR)/kernel.o
 
+TRAP_SRC   = $(SRCDIR)/trap.cpp
+TRAP_OBJ   = $(BINDIR)/trap.o
+
 # Minimal C++ ABI/runtime stubs
 ABI_SRC    = $(SRCDIR)/cxxabi.cpp
 ABI_OBJ    = $(BINDIR)/cxxabi.o
@@ -33,7 +36,7 @@ SP_OBJS    = $(patsubst $(SP_SRCDIR)/%.cpp, $(SP_OBJDIR)/%.o, $(SP_SRCS))
 MEM_SRCS   = $(wildcard $(MEM_SRCDIR)/*.cpp)
 MEM_OBJS   = $(patsubst $(MEM_SRCDIR)/%.cpp, $(MEM_OBJDIR)/%.o, $(MEM_SRCS))
 
-ALL_OBJS   = $(ASM_OBJS) $(KERNEL_OBJ) $(ABI_OBJ) $(SP_OBJS) $(MEM_OBJS)
+ALL_OBJS   = $(ASM_OBJS) $(KERNEL_OBJ) $(TRAP_OBJ) $(ABI_OBJ) $(SP_OBJS) $(MEM_OBJS)
 
 LINKER_LD  = $(ASM_SRCDIR)/linker.ld
 
@@ -71,6 +74,10 @@ $(MEM_OBJDIR)/%.o: $(MEM_SRCDIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(KERNEL_OBJ): $(KERNEL_SRC)
+	@mkdir -p $(BINDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(TRAP_OBJ): $(TRAP_SRC)
 	@mkdir -p $(BINDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
