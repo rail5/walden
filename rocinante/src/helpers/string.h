@@ -23,58 +23,77 @@ namespace Rocinante {
 class String final {
 	private:
 		char* m_data;
-		uint32_t m_capacity;
-		uint32_t m_length;
+		std::uint32_t m_capacity;
+		std::uint32_t m_length;
+
+		static constexpr std::uint32_t kInitialCapacityBytes = 16;
 
 		void _initialize() {
-			m_capacity = 16; // Start with a small capacity and grow as needed
+			// The string invariant is: when m_data != nullptr, m_data[m_length] is always a NUL terminator.
+			m_capacity = kInitialCapacityBytes;
 			m_length = 0;
 			m_data = static_cast<char*>(Rocinante::Heap::Alloc(m_capacity, alignof(char)));
+			m_data[0] = '\0';
 		}
 
 		void _double_capacity() {
 			m_capacity *= 2;
 			char* new_data = static_cast<char*>(Rocinante::Heap::Alloc(m_capacity, alignof(char)));
-			for (uint32_t i = 0; i < m_length; i++) {
+			for (std::uint32_t i = 0; i < m_length; i++) {
 				new_data[i] = m_data[i];
 			}
+			new_data[m_length] = '\0';
 			Rocinante::Heap::Free(m_data);
 			m_data = new_data;
 		}
 	public:
 		String() : m_data(nullptr), m_length(0) {}
-		String(char* data, uint32_t length) : m_data(data), m_length(length) {}
+		String(const char* data, std::uint32_t length) : m_data(nullptr), m_capacity(0), m_length(0) {
+			if (data == nullptr || length == 0) return;
+			m_capacity = length + 1;
+			m_data = static_cast<char*>(Rocinante::Heap::Alloc(m_capacity, alignof(char)));
+			for (std::uint32_t i = 0; i < length; i++) {
+				m_data[i] = data[i];
+			}
+			m_length = length;
+			m_data[m_length] = '\0';
+		}
+
+		// Backward-compatible overload: treats `data` as input bytes and copies them.
+		String(char* data, std::uint32_t length) : String(static_cast<const char*>(data), length) {}
 
 		~String() {
 			if (m_data) Rocinante::Heap::Free(m_data);
 		}
 
 		const char* data() const { return m_data; }
-		uint32_t length() const { return m_length; }
-		uint32_t size() const { return m_length; }
+		std::uint32_t length() const { return m_length; }
+		std::uint32_t size() const { return m_length; }
 
 		void append(char c) {
 			if (m_data == nullptr) _initialize();
-			if (m_length + 1 >= m_capacity) _double_capacity();
+			// Need room for the new character plus the trailing NUL terminator.
+			while ((m_length + 2) > m_capacity) _double_capacity();
 			m_data[m_length] = c;
 			m_length++;
+			m_data[m_length] = '\0';
 		}
 
 		void append(const char* str) {
 			while (*str) append(*str++);
 		}
 
-		char at(uint32_t index) const {
+		char at(std::uint32_t index) const {
 			if (index >= m_length) return '\0'; // Out of bounds, return null character
 			return m_data[index];
 		}
 
-		char operator[](uint32_t index) const {
+		char operator[](std::uint32_t index) const {
 			return at(index);
 		}
 
 		void append(const String& other) {
-			for (uint32_t i = 0; i < other.length(); i++) {
+			for (std::uint32_t i = 0; i < other.length(); i++) {
 				append(other.at(i));
 			}
 		}
@@ -118,18 +137,21 @@ String to_string(T value) {
 	}
 
 	bool is_negative = false;
+	using UnsignedT = std::make_unsigned_t<T>;
+	UnsignedT magnitude = static_cast<UnsignedT>(value);
 	if constexpr (std::is_signed_v<T>) {
 		if (value < 0) {
 			is_negative = true;
-			value = -value; // This is safe even for the most negative value of a signed type due to two's complement representation
+			// Avoid UB for INT_MIN by doing the negation in unsigned space.
+			magnitude = static_cast<UnsignedT>(0) - static_cast<UnsignedT>(value);
 		}
 	}
 
 	char buffer[20]; // Enough to hold the string representation of any 64-bit integer
 	int index = 0;
-	while (value > 0) {
-		buffer[index++] = '0' + (value % 10);
-		value /= 10;
+	while (magnitude > 0) {
+		buffer[index++] = static_cast<char>('0' + (magnitude % 10));
+		magnitude /= 10;
 	}
 
 	if (is_negative) {
