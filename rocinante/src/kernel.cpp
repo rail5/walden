@@ -6,6 +6,7 @@
 #include "kernel.h"
 
 #include <src/memory/memory.h>
+#include <src/memory/boot_memory_map.h>
 #include <src/sp/cpucfg.h>
 #include <src/sp/uart16550.h>
 #include <src/sp/mmio.h>
@@ -20,13 +21,41 @@ constexpr std::uintptr_t UART_BASE = 0x1fe001e0UL; // QEMU LoongArch virt: VIRT_
 
 static constinit Rocinante::Uart16550 uart(UART_BASE);
 
+static const char* BootMemoryRegionTypeToString(Rocinante::Memory::BootMemoryRegion::Type type) {
+	switch (type) {
+		case Rocinante::Memory::BootMemoryRegion::Type::UsableRAM:
+			return "UsableRAM";
+		case Rocinante::Memory::BootMemoryRegion::Type::Reserved:
+			return "Reserved";
+	}
+	return "Unknown";
+}
+
+static void PrintBootMemoryMap(const Rocinante::Uart16550& uart, const Rocinante::Memory::BootMemoryMap& map) {
+	uart.puts("Boot memory map (DTB):\n");
+	uart.puts("  Region count: ");
+	uart.write(Rocinante::to_string(map.region_count));
+	uart.putc('\n');
+
+	for (std::size_t i = 0; i < map.region_count; i++) {
+		const auto& r = map.regions[i];
+		uart.puts("  - ");
+		uart.puts(BootMemoryRegionTypeToString(r.type));
+		uart.puts(" base=");
+		uart.write(Rocinante::to_string(r.physical_base));
+		uart.puts(" size_bytes=");
+		uart.write(Rocinante::to_string(r.size_bytes));
+		uart.putc('\n');
+	}
+}
+
 [[noreturn]] static inline void halt() {
 	for (;;) {
 		asm volatile("idle 0" ::: "memory");
 	}
 }
 
-[[noreturn]] static inline void shutdown() {
+[[noreturn]] [[maybe_unused]] static inline void shutdown() {
 	// QEMU LoongArch64 virt poweroff is wired up as a "syscon-poweroff" device.
 	// The virt machine advertises this via its DTB:
 	// - /poweroff compatible = "syscon-poweroff"
@@ -44,6 +73,7 @@ static constinit Rocinante::Uart16550 uart(UART_BASE);
 	// If QEMU ignores the poweroff request, just stop.
 	halt();
 }
+
 
 } // namespace
 
@@ -131,6 +161,24 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	}
 	shutdown();
 	#endif
+
+	// QEMU's direct-kernel boot convention is platform/firmware-defined; for the
+	// LoongArch virt machine it commonly passes a DTB pointer in a2.
+	//
+	// We currently name this parameter `efi_system_table_ptr` because we expect
+	// to support a UEFI-compliant boot environment later. For bring-up, we detect
+	// a DTB structurally and parse it if present.
+	const void* maybe_device_tree_blob = reinterpret_cast<const void*>(efi_system_table_ptr);
+	if (Rocinante::Memory::BootMemoryMap::LooksLikeDeviceTreeBlob(maybe_device_tree_blob)) {
+		Rocinante::Memory::BootMemoryMap boot_map;
+		if (boot_map.TryParseFromDeviceTree(maybe_device_tree_blob)) {
+			PrintBootMemoryMap(uart, boot_map);
+		} else {
+			uart.puts("DTB detected but failed to parse boot memory map\n");
+		}
+	} else {
+		uart.puts("No DTB detected in a2; skipping boot memory map parse\n");
+	}
 
 	auto& cpucfg = Rocinante::GetCPUCFG();
 

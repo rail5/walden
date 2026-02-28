@@ -55,6 +55,24 @@ void __cxa_guard_abort(std::uint64_t* guard);
 [[noreturn]] void __cxa_pure_virtual();
 
 // ---------------------------------------------------------------------------
+// Minimal C memory routines
+// ---------------------------------------------------------------------------
+//
+// Even in a freestanding kernel, the compiler may emit calls to common C
+// memory routines (either directly or by lowering aggregate initialization,
+// trivial copies, etc.). Since we link with -nostdlib, we must provide these
+// symbols ourselves.
+//
+// Design goals:
+// - Correctness over cleverness.
+// - No dependencies (no libc, no heap).
+// - Readable implementations suitable for early bring-up.
+void* memset(void* destination, int byte_value, std::size_t byte_count);
+void* memcpy(void* destination, const void* source, std::size_t byte_count);
+void* memmove(void* destination, const void* source, std::size_t byte_count);
+int memcmp(const void* a, const void* b, std::size_t byte_count);
+
+// ---------------------------------------------------------------------------
 // __cxa_atexit / __dso_handle
 // ---------------------------------------------------------------------------
 //
@@ -125,6 +143,52 @@ void __cxa_pure_virtual() {
 	for (;;) {
 		asm volatile("" ::: "memory");
 	}
+}
+
+void* memset(void* destination, int byte_value, std::size_t byte_count) {
+	auto* dst = static_cast<std::uint8_t*>(destination);
+	const std::uint8_t value = static_cast<std::uint8_t>(byte_value);
+	for (std::size_t i = 0; i < byte_count; i++) {
+		dst[i] = value;
+	}
+	return destination;
+}
+
+void* memcpy(void* destination, const void* source, std::size_t byte_count) {
+	auto* dst = static_cast<std::uint8_t*>(destination);
+	auto* src = static_cast<const std::uint8_t*>(source);
+	for (std::size_t i = 0; i < byte_count; i++) {
+		dst[i] = src[i];
+	}
+	return destination;
+}
+
+void* memmove(void* destination, const void* source, std::size_t byte_count) {
+	auto* dst = static_cast<std::uint8_t*>(destination);
+	auto* src = static_cast<const std::uint8_t*>(source);
+	if (dst == src || byte_count == 0) return destination;
+
+	if (dst < src) {
+		for (std::size_t i = 0; i < byte_count; i++) {
+			dst[i] = src[i];
+		}
+		return destination;
+	}
+
+	for (std::size_t i = byte_count; i != 0; i--) {
+		dst[i - 1] = src[i - 1];
+	}
+	return destination;
+}
+
+int memcmp(const void* a, const void* b, std::size_t byte_count) {
+	auto* p = static_cast<const std::uint8_t*>(a);
+	auto* q = static_cast<const std::uint8_t*>(b);
+	for (std::size_t i = 0; i < byte_count; i++) {
+		if (p[i] == q[i]) continue;
+		return (p[i] < q[i]) ? -1 : 1;
+	}
+	return 0;
 }
 
 } // extern "C"
