@@ -36,6 +36,18 @@ Further:
   - While you're making a change, you may (for example) start going down one road and then change course.
   - When you change course, you shouldn't leave the old junk lying around. At that point, revert and then move forward with a clean slate.
   - This goes for both code and for documentation. Dead code and outdated documentation are both harmful.
+- **Write C++, not C.**
+  - Especially in kernel development, it may be tempting to write C-style code. But we're using C++, not C.
+  - Of course, we want to be *deliberate* about the C++ we write. Some people complain that behavior is "hidden" in C++ -- this is not true if you write clear, explicit C++.
+  - Make proper use of object orientation -- why have a struct with a bunch of related functions that take a pointer to the struct, when you can have a class with member functions?
+  - Use RAII for resource management where appropriate.
+  - Use `constexpr` and `const` to express intent and invariants.
+  - Use namespaces to organize code and avoid name collisions.
+  - Use C++-style casts (`static_cast`, `reinterpret_cast`) instead of C-style casts.
+  - Etc
+- **Do not write "vibe" solutions.**
+  - Refer to the LoongArch64 spec and hardware manuals, not to "yeah I reckon" or "this looks about right to me."
+  - If the code relies on a particular hardware behavior, document that behavior and the source of your understanding (e.g., "Loongson 3A5000 manual, section 4.2.1, states that...").
 
 ## Documentation Expectations (especially low-level)
 
