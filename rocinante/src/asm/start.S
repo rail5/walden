@@ -21,8 +21,19 @@ _start:
 	move    $s1, $a1
 	move    $s2, $a2
 
-	// Initialize the stack pointer to the top of a statically reserved stack in .bss
-	la      $sp, stack_top
+	// Initialize the stack pointer to the top of a statically reserved stack in .bss.
+	//
+	// We build the address in two explicit steps:
+	// 1) `pcalau12i` adds the high part of the target address to the current
+	//    instruction address.
+	// 2) `addi.d` adds the low part.
+	//
+	// We do this explicitly instead of using `la` because `la` is a pseudoinstruction.
+	// Different assemblers may expand `la` in different ways, including an indirect
+	// load through the Global Offset Table. At this early boot stage we want the
+	// stack setup path to be direct and predictable across toolchains.
+	pcalau12i $sp, %pc_hi20(stack_top)
+	addi.d    $sp, $sp, %pc_lo12(stack_top)
 
 	// Now that we have a stack, we can call C++ code. Move the original arguments back into the argument registers and call kernel_main.
 	move    $a0, $s0

@@ -48,13 +48,13 @@ LINKER_LD  = $(ASM_SRCDIR)/linker.ld
 
 ## Toolchain and flags
 ## Cross-compilation to LoongArch64, compiler and linker flags
-CROSS     ?= loongarch64-linux-gnu-
-CC         = $(CROSS)gcc
-CXX        = $(CROSS)g++
-LD         = $(CROSS)ld
-CFLAGS     = -ffreestanding -nostdlib -fno-asynchronous-unwind-tables -Wall -Wextra -O2 -I$(PROJECT_ROOT_DIRECTORY)
-CXXFLAGS   = $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++23
-LDFLAGS    = -T $(LINKER_LD) -nostdlib -s
+TARGET_TRIPLE ?= loongarch64-linux-gnu
+CC             = clang
+CXX            = clang++
+LD             = $(CXX)
+CFLAGS         = --target=$(TARGET_TRIPLE) -ffreestanding -nostdlib -fno-asynchronous-unwind-tables -fno-pic -mno-lsx -mno-lasx -fno-vectorize -fno-slp-vectorize -Wall -Wextra -O2 -I$(PROJECT_ROOT_DIRECTORY)
+CXXFLAGS       = $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++23
+LDFLAGS        = --target=$(TARGET_TRIPLE) -fuse-ld=lld -nostdlib -static -Wl,-no-pie -Wl,-T,$(LINKER_LD) -Wl,-s
 
 ifeq ($(ROCINANTE_TESTS),1)
 	CXXFLAGS += -DROCINANTE_TESTS
@@ -64,9 +64,15 @@ endif
 all: $(TARGET)
 
 check-toolchain:
-	@command -v $(CC) &>/dev/null || (\
-		echo "ERROR: Missing LoongArch64 cross toolchain (tried prefix '$(CROSS)')"; \
-		echo "Install a LoongArch64 cross-compiler, or re-run with CROSS= set to the correct prefix."; \
+	@command -v $(CC) >/dev/null 2>&1 || (\
+		echo "ERROR: Missing C compiler '$(CC)'"; \
+		exit 1)
+	@command -v $(CXX) >/dev/null 2>&1 || (\
+		echo "ERROR: Missing C++ compiler '$(CXX)'"; \
+		exit 1)
+	@command -v ld.lld >/dev/null 2>&1 || (\
+		echo "ERROR: Missing linker 'ld.lld' required for Clang cross-linking"; \
+		echo "Install LLVM lld and re-run make."; \
 		exit 1)
 
 $(TARGET): check-toolchain $(ALL_OBJS)
@@ -107,7 +113,7 @@ clean:
 
 run: $(TARGET)
 	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
-		-monitor none -kernel $<
+		-monitor none -kernel $< -append "test=1"
 
 test:
 	@$(MAKE) -C $(PROJECT_ROOT_DIRECTORY) ROCINANTE_TESTS=1 MAKEFLAGS= clean all

@@ -71,10 +71,6 @@ void DisableInterrupts();
 // - CSR.TCFG    (Timer Configuration)
 // - CSR.TINTCLR (Timer Interrupt Clear)
 //
-// The self-tests in `kernel.cpp` can enable these at build time:
-// - `ROCINANTE_SELFTEST_TRAPS`
-// - `ROCINANTE_SELFTEST_TIMER_IRQ`
-
 // Masks/unmasks interrupt lines via CSR.ECFG (does not toggle CRMD.IE).
 void MaskAllInterruptLines();
 void UnmaskTimerInterruptLine();

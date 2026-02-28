@@ -4,7 +4,7 @@
  */
 
 // This file provides a *minimal* subset of the C++ ABI/runtime hooks that
-// g++ may reference.
+// the compiler may reference.
 //
 // Why do we need this?
 // --------------------

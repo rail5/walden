@@ -8,4 +8,4 @@
 
 &mdash; Wikipedia, [Rocinante](https://en.wikipedia.org/wiki/Rocinante)
 
-Rocinante is the kernel of the Walden operating system. It is a microkernel written in C++23 with GNU extensions targeting the LoongArch64 architecture.
+Rocinante is the kernel of the Walden operating system. It is a microkernel written in C++23 (GNU dialect) and built with Clang/LLVM for the LoongArch64 architecture.

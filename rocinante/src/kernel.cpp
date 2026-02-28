@@ -12,25 +12,13 @@
 #include <src/helpers/optional.h>
 #include <src/trap.h>
 
-#if defined(ROCINANTE_TESTS)
 #include <src/testing/test.h>
-#endif
 
 namespace {
 
 constexpr std::uintptr_t UART_BASE = 0x1fe001e0UL; // QEMU LoongArch virt: VIRT_UART_BASE address
 
 static constinit Rocinante::Uart16550 uart(UART_BASE);
-
-#if defined(ROCINANTE_SELFTEST_TIMER_IRQ)
-static volatile std::uint64_t g_timer_irq_seen = 0;
-
-static inline std::uint64_t rdtime_d() {
-	std::uint64_t value;
-	asm volatile("rdtime.d %0, $zero" : "=r"(value));
-	return value;
-}
-#endif
 
 [[noreturn]] static inline void halt() {
 	for (;;) {
@@ -81,9 +69,6 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	if (exception_code == 0 && (interrupt_status & kTimerInterruptLineBit) != 0) {
 		Rocinante::Trap::ClearTimerInterrupt();
 		Rocinante::Trap::StopTimer();
-		#if defined(ROCINANTE_SELFTEST_TIMER_IRQ)
-		g_timer_irq_seen = 1;
-		#endif
 		return;
 	}
 
@@ -129,6 +114,14 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	Rocinante::Memory::InitEarly();
 	Rocinante::Trap::Initialize();
 
+	// Read the kernel command line from the pointer passed in a1 by the boot environment, if present.
+	if (kernel_cmdline_ptr) {
+		const char* cmdline = reinterpret_cast<const char*>(kernel_cmdline_ptr);
+		uart.puts("Kernel command line: ");
+		uart.puts(cmdline);
+		uart.putc('\n');
+	}
+
 	#if defined(ROCINANTE_TESTS)
 	const int failed = Rocinante::Testing::RunAll(&uart);
 	if (failed == 0) {
@@ -146,37 +139,6 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	info += "Don the LoongArch64 armor and prepare to ride!\n\n";
 
 	uart.write(info);
-
-	#if defined(ROCINANTE_SELFTEST_TRAPS)
-	uart.puts("Triggering BREAK self-test...\n");
-	asm volatile("break 0" ::: "memory");
-	uart.puts("BREAK returned OK (ERTN path works)\n\n");
-	#endif
-
-	#if defined(ROCINANTE_SELFTEST_TIMER_IRQ)
-	uart.puts("Triggering timer IRQ self-test...\n");
-	Rocinante::Trap::DisableInterrupts();
-	Rocinante::Trap::MaskAllInterruptLines();
-	Rocinante::Trap::StartOneShotTimerTicks(100000); // small delay
-	Rocinante::Trap::UnmaskTimerInterruptLine();
-	Rocinante::Trap::EnableInterrupts();
-
-	const std::uint64_t t0 = rdtime_d();
-	while (g_timer_irq_seen == 0) {
-		const std::uint64_t now = rdtime_d();
-		if ((now - t0) > 50000000ull) { // ~0.5s at 100MHz (approx; good enough for bring-up)
-			break;
-		}
-		asm volatile("nop" ::: "memory");
-	}
-
-	if (g_timer_irq_seen != 0) {
-		uart.puts("Timer IRQ received (interrupt delivery works)\n\n");
-	} else {
-		uart.puts("Timer IRQ timed out (interrupt delivery NOT working yet)\n\n");
-	}
-	Rocinante::Trap::DisableInterrupts();
-	#endif
 
 	// Print some information about the CPU configuration using the CPUCFG class
 	uart.puts("CPU Architecture: ");
