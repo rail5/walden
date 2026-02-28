@@ -7,6 +7,7 @@
 
 #include <src/memory/memory.h>
 #include <src/memory/boot_memory_map.h>
+#include <src/memory/pmm.h>
 #include <src/sp/cpucfg.h>
 #include <src/sp/uart16550.h>
 #include <src/sp/mmio.h>
@@ -49,6 +50,51 @@ static void PrintBootMemoryMap(const Rocinante::Uart16550& uart, const Rocinante
 	}
 }
 
+static void PrintPhysicalMemoryManagerSummary(const Rocinante::Uart16550& uart, const Rocinante::Memory::PhysicalMemoryManager& pmm) {
+	uart.puts("PMM summary:\n");
+	uart.puts("  Tracked physical base:  ");
+	uart.write(Rocinante::to_string(pmm.TrackedPhysicalBase()));
+	uart.putc('\n');
+	uart.puts("  Tracked physical limit: ");
+	uart.write(Rocinante::to_string(pmm.TrackedPhysicalLimit()));
+	uart.putc('\n');
+	uart.puts("  Total pages: ");
+	uart.write(Rocinante::to_string(pmm.TotalPages()));
+	uart.putc('\n');
+	uart.puts("  Free pages:  ");
+	uart.write(Rocinante::to_string(pmm.FreePages()));
+	uart.putc('\n');
+}
+
+static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
+	// QEMU's direct-kernel boot commonly places the DTB in low physical memory.
+	// Our linker script intentionally keeps the kernel image clear of this area.
+	//
+	// We do not yet parse the EFI system table to locate FDT/ACPI tables.
+	// For current bring-up (especially QEMU direct-kernel boot), we use this
+	// scan as a heuristic to locate a valid FDT header in the conventional
+	// low-memory "boot info" area.
+	// Search range policy:
+	// - Start at 0x4 instead of 0x0 so we never pass a null pointer.
+	// - Search the first 16 MiB, which is a common area for firmware/boot blobs.
+	static constexpr std::uintptr_t kSearchBeginPhysical = 0x00000004UL;
+	static constexpr std::uintptr_t kSearchEndPhysical = 0x01000000UL;
+	static constexpr std::size_t kSearchStepBytes = 4;
+
+	for (std::uintptr_t candidate = kSearchBeginPhysical; (candidate + 4) < kSearchEndPhysical; candidate += kSearchStepBytes) {
+		const void* p = reinterpret_cast<const void*>(candidate);
+		if (!Rocinante::Memory::BootMemoryMap::LooksLikeDeviceTreeBlob(p)) continue;
+
+		const std::size_t total_size_bytes = Rocinante::Memory::BootMemoryMap::DeviceTreeTotalSizeBytesOrZero(p);
+		if (total_size_bytes == 0) continue;
+		if ((candidate + total_size_bytes) > kSearchEndPhysical) continue;
+
+		return p;
+	}
+
+	return nullptr;
+}
+
 [[noreturn]] static inline void halt() {
 	for (;;) {
 		asm volatile("idle 0" ::: "memory");
@@ -76,6 +122,9 @@ static void PrintBootMemoryMap(const Rocinante::Uart16550& uart, const Rocinante
 
 
 } // namespace
+
+extern "C" char _start;
+extern "C" char _end;
 
 extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	const std::uint64_t exception_code =
@@ -144,6 +193,14 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	Rocinante::Memory::InitEarly();
 	Rocinante::Trap::Initialize();
 
+	uart.puts("Boot args (raw): a0=");
+	uart.write(Rocinante::to_string(is_uefi_compliant_bootenv));
+	uart.puts(" a1=");
+	uart.write(Rocinante::to_string(kernel_cmdline_ptr));
+	uart.puts(" a2=");
+	uart.write(Rocinante::to_string(efi_system_table_ptr));
+	uart.putc('\n');
+
 	// Read the kernel command line from the pointer passed in a1 by the boot environment, if present.
 	if (kernel_cmdline_ptr) {
 		const char* cmdline = reinterpret_cast<const char*>(kernel_cmdline_ptr);
@@ -162,22 +219,46 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	shutdown();
 	#endif
 
-	// QEMU's direct-kernel boot convention is platform/firmware-defined; for the
-	// LoongArch virt machine it commonly passes a DTB pointer in a2.
-	//
-	// We currently name this parameter `efi_system_table_ptr` because we expect
-	// to support a UEFI-compliant boot environment later. For bring-up, we detect
-	// a DTB structurally and parse it if present.
-	const void* maybe_device_tree_blob = reinterpret_cast<const void*>(efi_system_table_ptr);
-	if (Rocinante::Memory::BootMemoryMap::LooksLikeDeviceTreeBlob(maybe_device_tree_blob)) {
+	// Flaw / bring-up gap:
+	// We do not yet implement EFI system table parsing to locate ACPI/FDT tables.
+	// For QEMU direct-kernel bring-up, we therefore rely on a heuristic: scan low
+	// physical memory for a structurally-valid DTB.
+	const void* maybe_device_tree_blob = TryLocateDeviceTreeBlobPointerFromBootInfoRegion();
+
+	if (maybe_device_tree_blob) {
+		const std::uintptr_t device_tree_physical_base = reinterpret_cast<std::uintptr_t>(maybe_device_tree_blob);
+		const std::size_t device_tree_size_bytes = Rocinante::Memory::BootMemoryMap::DeviceTreeTotalSizeBytesOrZero(maybe_device_tree_blob);
+		uart.puts("DTB detected: base=");
+		uart.write(Rocinante::to_string(device_tree_physical_base));
+		uart.puts(" size_bytes=");
+		uart.write(Rocinante::to_string(device_tree_size_bytes));
+		uart.puts(" source=scan(low-mem)" );
+		uart.putc('\n');
+
 		Rocinante::Memory::BootMemoryMap boot_map;
 		if (boot_map.TryParseFromDeviceTree(maybe_device_tree_blob)) {
 			PrintBootMemoryMap(uart, boot_map);
+
+			const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+			const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+
+			auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+			if (pmm.InitializeFromBootMemoryMap(
+				boot_map,
+				kernel_physical_base,
+				kernel_physical_end,
+				device_tree_physical_base,
+				device_tree_size_bytes
+			)) {
+				PrintPhysicalMemoryManagerSummary(uart, pmm);
+			} else {
+				uart.puts("Failed to initialize PMM from boot memory map\n");
+			}
 		} else {
 			uart.puts("DTB detected but failed to parse boot memory map\n");
 		}
 	} else {
-		uart.puts("No DTB detected in a2; skipping boot memory map parse\n");
+		uart.puts("No DTB detected; skipping boot memory map parse\n");
 	}
 
 	auto& cpucfg = Rocinante::GetCPUCFG();

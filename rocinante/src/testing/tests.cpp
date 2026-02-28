@@ -11,6 +11,9 @@
 #include <src/sp/cpucfg.h>
 #include <src/trap.h>
 
+#include <src/memory/boot_memory_map.h>
+#include <src/memory/pmm.h>
+
 namespace Rocinante::Testing {
 
 namespace {
@@ -142,6 +145,69 @@ static void Test_Interrupts_TimerIRQ_DeliversAndClears(TestContext* ctx) {
 	ROCINANTE_EXPECT_TRUE(ctx, TimerInterruptObserved());
 }
 
+static void Test_PMM_RespectsReservedKernelAndDTB(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+
+	// Construct a synthetic boot memory map.
+	//
+	// Layout (all addresses are physical):
+	// - Usable RAM: 16 pages (64 KiB)
+	// - Reserved region: 2 pages inside usable RAM
+	// - Kernel image: 4 pages inside usable RAM
+	// - DTB blob: 1 page inside usable RAM
+	static constexpr std::uintptr_t kUsableBase = 0x00100000;
+	static constexpr std::size_t kUsableSizeBytes = 16 * PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uintptr_t kReservedBase = 0x00108000;
+	static constexpr std::size_t kReservedSizeBytes = 2 * PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uintptr_t kKernelBase = 0x00100000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00104000;
+
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x0010C000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = 1 * PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kReservedBase, .size_bytes = kReservedSizeBytes, .type = BootMemoryRegion::Type::Reserved}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	// Expected free pages: total usable (16) minus reserved (2) minus kernel (4) minus DTB (1) = 9.
+	static constexpr std::size_t kExpectedTotalPages = 16;
+	static constexpr std::size_t kExpectedFreePages = 9;
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.TotalPages(), kExpectedTotalPages);
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), kExpectedFreePages);
+
+	// Allocate all pages and ensure no allocation falls into reserved/kernel/DTB.
+	std::size_t allocations = 0;
+	while (true) {
+		const auto page = pmm.AllocatePage();
+		if (!page.has_value()) break;
+		const std::uintptr_t physical = page.value();
+		allocations++;
+
+		ROCINANTE_EXPECT_TRUE(ctx, (physical % PhysicalMemoryManager::kPageSizeBytes) == 0);
+		ROCINANTE_EXPECT_TRUE(ctx, physical >= kUsableBase);
+		ROCINANTE_EXPECT_TRUE(ctx, physical < (kUsableBase + kUsableSizeBytes));
+
+		const bool in_reserved = (physical >= kReservedBase) && (physical < (kReservedBase + kReservedSizeBytes));
+		const bool in_kernel = (physical >= kKernelBase) && (physical < kKernelEnd);
+		const bool in_dtb = (physical >= kDeviceTreeBase) && (physical < (kDeviceTreeBase + kDeviceTreeSizeBytes));
+		ROCINANTE_EXPECT_TRUE(ctx, !in_reserved);
+		ROCINANTE_EXPECT_TRUE(ctx, !in_kernel);
+		ROCINANTE_EXPECT_TRUE(ctx, !in_dtb);
+	}
+
+	ROCINANTE_EXPECT_EQ_U64(ctx, allocations, kExpectedFreePages);
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), 0);
+}
+
 } // namespace
 
 extern const TestCase g_test_cases[] = {
@@ -149,6 +215,7 @@ extern const TestCase g_test_cases[] = {
 	{"CPUCFG.FakeBackend.CachesWords", &Test_CPUCFG_FakeBackend_CachesWords},
 	{"Traps.BREAK.EntersAndReturns", &Test_Traps_BREAK_EntersAndReturns},
 	{"Interrupts.TimerIRQ.DeliversAndClears", &Test_Interrupts_TimerIRQ_DeliversAndClears},
+	{"Memory.PMM.RespectsReservedKernelAndDTB", &Test_PMM_RespectsReservedKernelAndDTB},
 };
 
 extern const std::size_t g_test_case_count = sizeof(g_test_cases) / sizeof(g_test_cases[0]);

@@ -438,6 +438,12 @@ bool BootMemoryMap::LooksLikeDeviceTreeBlob(const void* device_tree_blob) {
 	return TryMakeFdtView(device_tree_blob, &view);
 }
 
+std::size_t BootMemoryMap::DeviceTreeTotalSizeBytesOrZero(const void* device_tree_blob) {
+	FdtView view{};
+	if (!TryMakeFdtView(device_tree_blob, &view)) return 0;
+	return view.total_size_bytes;
+}
+
 bool BootMemoryMap::TryParseFromDeviceTree(const void* device_tree_blob) {
 	Clear();
 

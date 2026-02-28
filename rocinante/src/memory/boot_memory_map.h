@@ -69,6 +69,12 @@ struct BootMemoryMap final {
 	// to help distinguish (DTB pointer) vs (UEFI system table pointer).
 	static bool LooksLikeDeviceTreeBlob(const void* device_tree_blob);
 
+	// Returns the DTB's `totalsize` field in bytes, or 0 if the blob does not
+	// look like a valid DTB.
+	//
+	// This is useful for reserving the DTB blob itself in the PMM.
+	static std::size_t DeviceTreeTotalSizeBytesOrZero(const void* device_tree_blob);
+
 	// Parses a DTB/FDT memory map into this BootMemoryMap.
 	//
 	// Extracts:
