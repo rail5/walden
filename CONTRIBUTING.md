@@ -32,6 +32,8 @@ Further:
   - A lot of this code is ABI-sensitive (assembly -- C++ struct layout, linker script expectations, boot protocol). Make those invariants visible and hard to accidentally break.
 - **Keep changes minimal and focused.**
   - Don’t refactor unrelated code in the same change.
+- **Do not litter.**
+  - While you're making a change, you may (for example) start going down one road and then change course. When you change course, you shouldn't leave the old junk lying around. At that point, back up, clean up, and then move forward with a clean slate. This goes for both code and for documentation.
 
 ## Documentation Expectations (especially low-level)
 
