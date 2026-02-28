@@ -56,6 +56,14 @@ CFLAGS         = --target=$(TARGET_TRIPLE) -ffreestanding -nostdlib -fno-asynchr
 CXXFLAGS       = $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++23
 LDFLAGS        = --target=$(TARGET_TRIPLE) -fuse-ld=lld -nostdlib -static -Wl,-no-pie -Wl,-T,$(LINKER_LD) -Wl,-s
 
+ifeq ($(ROCINANTE_PAGING_BRINGUP),1)
+	CXXFLAGS += -DROCINANTE_PAGING_BRINGUP
+endif
+
+ifeq ($(ROCINANTE_ENABLE_PAGING_NOW),1)
+	CXXFLAGS += -DROCINANTE_ENABLE_PAGING_NOW
+endif
+
 ifeq ($(ROCINANTE_TESTS),1)
 	CXXFLAGS += -DROCINANTE_TESTS
 	ALL_OBJS += $(TEST_OBJS)

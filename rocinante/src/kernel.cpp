@@ -8,6 +8,9 @@
 #include <src/memory/memory.h>
 #include <src/memory/boot_memory_map.h>
 #include <src/memory/pmm.h>
+#include <src/memory/paging.h>
+#include <src/memory/paging_hw.h>
+#include <src/memory/virtual_layout.h>
 #include <src/sp/cpucfg.h>
 #include <src/sp/uart16550.h>
 #include <src/sp/mmio.h>
@@ -189,7 +192,7 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	halt();
 }
 
-extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv, std::uint64_t kernel_cmdline_ptr, std::uint64_t efi_system_table_ptr) {
+extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv, std::uint64_t kernel_cmdline_ptr, std::uint64_t boot_info_ptr_a2) {
 	Rocinante::Memory::InitEarly();
 	Rocinante::Trap::Initialize();
 
@@ -198,7 +201,7 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	uart.puts(" a1=");
 	uart.write(Rocinante::to_string(kernel_cmdline_ptr));
 	uart.puts(" a2=");
-	uart.write(Rocinante::to_string(efi_system_table_ptr));
+	uart.write(Rocinante::to_string(boot_info_ptr_a2));
 	uart.putc('\n');
 
 	// Read the kernel command line from the pointer passed in a1 by the boot environment, if present.
@@ -232,7 +235,7 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 		uart.write(Rocinante::to_string(device_tree_physical_base));
 		uart.puts(" size_bytes=");
 		uart.write(Rocinante::to_string(device_tree_size_bytes));
-		uart.puts(" source=scan(low-mem)" );
+		uart.puts(" source=scan(low-mem)");
 		uart.putc('\n');
 
 		Rocinante::Memory::BootMemoryMap boot_map;
@@ -251,6 +254,109 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 				device_tree_size_bytes
 			)) {
 				PrintPhysicalMemoryManagerSummary(uart, pmm);
+
+				// Paging bring-up is intentionally compile-time gated.
+				//
+				// Flaw / bring-up gap:
+				// - We have not yet validated our page table entry encoding against the
+				//   LoongArch privileged spec end-to-end.
+				// - We also do not yet establish a full physmap or a higher-half kernel.
+				// - Therefore, default behavior is to build page tables and print diagnostics
+				//   only; enabling paging requires opting in.
+				#if defined(ROCINANTE_PAGING_BRINGUP)
+				uart.puts("\nPaging bring-up: building bootstrap page tables\n");
+
+				const std::uint32_t virtual_address_bits = Rocinante::GetCPUCFG().VirtualAddressBits();
+				const std::uint32_t physical_address_bits = Rocinante::GetCPUCFG().PhysicalAddressBits();
+				uart.puts("Paging bring-up: CPUCFG VALEN=");
+				uart.write(Rocinante::to_string(virtual_address_bits));
+				uart.puts(" PALEN=");
+				uart.write(Rocinante::to_string(physical_address_bits));
+				uart.putc('\n');
+
+				constexpr auto BitIndexFromSingleBitMask = [](std::uint64_t mask) constexpr -> std::uint8_t {
+					std::uint8_t index = 0;
+					while (((mask >> index) & 0x1ull) == 0) {
+						index++;
+					}
+					return index;
+				};
+				constexpr std::uint8_t kLowestHighFlagBit =
+					(BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoRead) <
+						BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoExecute))
+						? BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoRead)
+						: BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoExecute);
+				constexpr std::uint32_t kMaxEncodablePALEN = kLowestHighFlagBit;
+				if (physical_address_bits < Rocinante::Memory::Paging::kPageShiftBits || physical_address_bits > kMaxEncodablePALEN) {
+					uart.puts("Paging bring-up: unsupported PALEN for current PTE encoding; skipping.\n");
+				} else {
+					const Rocinante::Memory::Paging::AddressSpaceBits address_bits{
+						.virtual_address_bits = static_cast<std::uint8_t>(virtual_address_bits),
+						.physical_address_bits = static_cast<std::uint8_t>(physical_address_bits),
+					};
+
+					const auto root_or = Rocinante::Memory::Paging::AllocateRootPageTable(&pmm);
+					if (!root_or.has_value()) {
+						uart.puts("Paging bring-up: failed to allocate root page table\n");
+					} else {
+						const auto root = root_or.value();
+
+						// Identity-map the kernel image so enabling paging does not immediately
+						// fault while executing in the low physical mapping.
+						const std::uintptr_t kernel_size_bytes = kernel_physical_end - kernel_physical_base;
+						const std::size_t map_size_rounded =
+							static_cast<std::size_t>((kernel_size_bytes + Rocinante::Memory::Paging::kPageSizeBytes - 1) &
+									~(Rocinante::Memory::Paging::kPageSizeBytes - 1));
+
+						Rocinante::Memory::Paging::PagePermissions kernel_permissions{
+							.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
+							.execute = Rocinante::Memory::Paging::ExecutePermissions::Executable,
+							.cache = Rocinante::Memory::Paging::CacheMode::CoherentCached,
+							.global = true,
+						};
+
+						if (!Rocinante::Memory::Paging::MapRange4KiB(
+							&pmm,
+							root,
+							kernel_physical_base,
+							kernel_physical_base,
+							map_size_rounded,
+							kernel_permissions,
+							address_bits
+						)) {
+							uart.puts("Paging bring-up: failed to map kernel identity range\n");
+						} else {
+							uart.puts("Paging bring-up: root_pt_phys=");
+							uart.write(Rocinante::to_string(root.root_physical_address));
+							uart.puts(" kernel_phys=[");
+							uart.write(Rocinante::to_string(kernel_physical_base));
+							uart.puts(", ");
+							uart.write(Rocinante::to_string(kernel_physical_end));
+							uart.puts(")\n");
+
+							// Configure the hardware page walker but do not enable paging unless
+							// explicitly requested.
+							const bool enable_ptw = Rocinante::GetCPUCFG().SupportsPageTableWalker();
+							const auto config_or = Rocinante::Memory::PagingHw::Make4KiBPageWalkerConfig(address_bits);
+							if (!config_or.has_value()) {
+								uart.puts("Paging bring-up: VALEN cannot be encoded in PWCL/PWCH for 4 KiB paging; skipping HW config.\n");
+							} else {
+								Rocinante::Memory::PagingHw::ConfigurePageTableWalker(root, config_or.value());
+								uart.puts("Paging bring-up: configured PWCL/PWCH/PGD CSRs (CPUCFG.HPTW=");
+								uart.puts(enable_ptw ? "on" : "off");
+								uart.puts(")\n");
+
+								#if defined(ROCINANTE_ENABLE_PAGING_NOW)
+								uart.puts("Paging bring-up: enabling paging (CRMD.PG=1, CRMD.DA=0)\n");
+								Rocinante::Memory::PagingHw::EnablePaging();
+								uart.puts("Paging bring-up: paging enabled\n");
+								#endif
+							}
+						}
+					}
+				}
+				}
+				#endif
 			} else {
 				uart.puts("Failed to initialize PMM from boot memory map\n");
 			}
@@ -304,28 +410,6 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	uart.write(Rocinante::to_string(cpucfg.PhysicalAddressBits()));
 	uart.putc('\n');
 
-	uart.putc('\n');
-
-	// &c...
-
-	uart.puts("Contents of the a0 register (is_uefi_compliant_bootenv): ");
-	uart.write(Rocinante::to_string(is_uefi_compliant_bootenv));
-	uart.putc('\n');
-
-	uart.puts("Contents of the a1 register (kernel_cmdline_ptr): ");
-	if (kernel_cmdline_ptr) {
-		uart.puts(reinterpret_cast<const char*>(kernel_cmdline_ptr));
-	} else {
-		uart.puts("(null)");
-	}
-	uart.putc('\n');
-
-	uart.puts("Contents of the a2 register (efi_system_table_ptr): ");
-	if (efi_system_table_ptr) {
-		uart.write(Rocinante::to_string(efi_system_table_ptr));
-	} else {
-		uart.puts("(null)");
-	}
 	uart.putc('\n');
 
 	halt();

@@ -13,7 +13,6 @@ namespace {
 //
 // Source of truth:
 // - LoongArch Privileged Architecture (CSRs)
-// Linux LoongArch headers use the same numbering (e.g. LOONGARCH_CSR_ECFG = 0x4)
 namespace Csr {
 	constexpr std::uint32_t CurrentModeInformation = 0x0;   // CSR.CRMD
 	constexpr std::uint32_t ExceptionConfiguration = 0x4;   // CSR.ECFG

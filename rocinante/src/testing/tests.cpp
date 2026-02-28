@@ -13,6 +13,7 @@
 
 #include <src/memory/boot_memory_map.h>
 #include <src/memory/pmm.h>
+#include <src/memory/paging.h>
 
 namespace Rocinante::Testing {
 
@@ -208,6 +209,146 @@ static void Test_PMM_RespectsReservedKernelAndDTB(TestContext* ctx) {
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), 0);
 }
 
+static void Test_Paging_MapTranslateUnmap(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapPage4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::Translate;
+	using Rocinante::Memory::Paging::UnmapPage4KiB;
+
+	// This test exercises the software page table builder/walker.
+	// It does not enable paging in hardware.
+
+	static constexpr std::uintptr_t kUsableBase = 0x00100000;
+	static constexpr std::size_t kUsableSizeBytes = 128 * PhysicalMemoryManager::kPageSizeBytes;
+
+	// Keep kernel/DTB reservations outside our usable range for this test.
+	static constexpr std::uintptr_t kKernelBase = 0x00400000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00401000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00500000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	const auto root = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root.has_value());
+
+	// Choose a canonical 48-bit high-half virtual address.
+	// Per the LoongArch spec, an implemented LA64 virtual address range is
+	// 0 -> 2^VALEN-1. Keep the test address within that range.
+	static constexpr std::uintptr_t kVirtualPageBase = 0x0000000000100000ull;
+	const auto physical_page = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, physical_page.has_value());
+	const std::uintptr_t physical_page_base = physical_page.value();
+
+	const PagePermissions permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(&pmm, root.value(), kVirtualPageBase, physical_page_base, permissions));
+
+	const auto translated = Translate(root.value(), kVirtualPageBase);
+	ROCINANTE_EXPECT_TRUE(ctx, translated.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, translated.value(), physical_page_base);
+
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(root.value(), kVirtualPageBase));
+	const auto translated_after_unmap = Translate(root.value(), kVirtualPageBase);
+	ROCINANTE_EXPECT_TRUE(ctx, !translated_after_unmap.has_value());
+}
+
+static void Test_Paging_RespectsVALENAndPALEN(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapPage4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::Translate;
+
+	// IMPORTANT:
+	// The kernel is linked at 0x00200000 (see src/asm/linker.ld). Keep synthetic
+	// "usable RAM" well away from the kernel image, otherwise the PMM may
+	// allocate pages that overwrite the running test binary.
+	static constexpr std::uintptr_t kUsableBase = 0x01000000;
+	static constexpr std::size_t kUsableSizeBytes = 128 * PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uintptr_t kKernelBase = 0x00600000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00601000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00700000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	const auto root = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root.has_value());
+
+	const auto physical_page = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, physical_page.has_value());
+	const std::uintptr_t physical_page_base = physical_page.value();
+
+	const PagePermissions permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	// Pick a smaller-than-typical address width to prove we do not hard-code 48.
+	// 39-bit virtual addresses => canonical addresses must sign-extend bit 38.
+	const AddressSpaceBits bits{.virtual_address_bits = 39, .physical_address_bits = 44};
+
+	static constexpr std::uintptr_t kGoodVirtualLow = 0x0000000000100000ull;
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(&pmm, root.value(), kGoodVirtualLow, physical_page_base, permissions, bits));
+	const auto translated = Translate(root.value(), kGoodVirtualLow, bits);
+	ROCINANTE_EXPECT_TRUE(ctx, translated.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, translated.value(), physical_page_base);
+
+	// Also accept a canonical high-half address (sign-extended).
+	const auto second_physical_page = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, second_physical_page.has_value());
+	const std::uintptr_t second_physical_page_base = second_physical_page.value();
+
+	const std::uintptr_t kGoodVirtualHigh =
+		(static_cast<std::uintptr_t>(~0ull) << bits.virtual_address_bits) |
+		(1ull << (bits.virtual_address_bits - 1)) |
+		kGoodVirtualLow;
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(&pmm, root.value(), kGoodVirtualHigh, second_physical_page_base, permissions, bits));
+	const auto translated_high = Translate(root.value(), kGoodVirtualHigh, bits);
+	ROCINANTE_EXPECT_TRUE(ctx, translated_high.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, translated_high.value(), second_physical_page_base);
+
+	// VA out of range for VALEN=39.
+	const std::uintptr_t bad_virtual = (1ull << 39);
+	ROCINANTE_EXPECT_TRUE(ctx, !MapPage4KiB(&pmm, root.value(), bad_virtual, physical_page_base, permissions, bits));
+
+	// PA out of range for PALEN=44.
+	const std::uintptr_t bad_physical = physical_page_base | (1ull << 44);
+	ROCINANTE_EXPECT_TRUE(ctx, !MapPage4KiB(&pmm, root.value(), kGoodVirtualLow + PhysicalMemoryManager::kPageSizeBytes, bad_physical, permissions, bits));
+}
+
 } // namespace
 
 extern const TestCase g_test_cases[] = {
@@ -215,6 +356,8 @@ extern const TestCase g_test_cases[] = {
 	{"CPUCFG.FakeBackend.CachesWords", &Test_CPUCFG_FakeBackend_CachesWords},
 	{"Traps.BREAK.EntersAndReturns", &Test_Traps_BREAK_EntersAndReturns},
 	{"Interrupts.TimerIRQ.DeliversAndClears", &Test_Interrupts_TimerIRQ_DeliversAndClears},
+	{"Memory.Paging.MapTranslateUnmap", &Test_Paging_MapTranslateUnmap},
+	{"Memory.Paging.RespectsVALENAndPALEN", &Test_Paging_RespectsVALENAndPALEN},
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &Test_PMM_RespectsReservedKernelAndDTB},
 };
 
