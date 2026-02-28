@@ -49,6 +49,8 @@ Further:
   - Refer to the LoongArch64 spec and hardware manuals, not to "yeah I reckon" or "this looks about right to me."
   - If the code relies on a particular hardware behavior, document that behavior and the source of your understanding (e.g., "Loongson 3A5000 manual, section 4.2.1, states that...").
 
+[rocinante/src/sp/cpucfg.h](rocinante/src/sp/cpucfg.h) and [rocinante/src/sp/uart16550.h](rocinante/src/sp/uart16550.h) are decent examples of these principles in action.
+
 ## Documentation Expectations (especially low-level)
 
 - **Assembly files require "why" comments.**
