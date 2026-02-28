@@ -69,6 +69,20 @@ void ResetTrapObservations();
 std::uint32_t BreakTrapCount();
 bool TimerInterruptObserved();
 
+// --- Expected synchronous exception support ---
+//
+// Some tests intentionally trigger synchronous exceptions and need the trap
+// handler to consume them and resume execution (by skipping the faulting
+// instruction). This mechanism is opt-in: tests must arm an expected trap.
+static constexpr std::uint64_t kAnyExceptionSubcode = ~0ull;
+
+void ArmExpectedTrap(std::uint64_t exception_code, std::uint64_t exception_subcode = kAnyExceptionSubcode);
+bool ExpectedTrapObserved();
+std::uint64_t ExpectedTrapExceptionCode();
+std::uint64_t ExpectedTrapExceptionSubCode();
+std::uint64_t ExpectedTrapEra();
+std::uint64_t ExpectedTrapBadVaddr();
+
 // --- Assertion helpers ---
 
 // Marks the current test as failed and prints a diagnostic.

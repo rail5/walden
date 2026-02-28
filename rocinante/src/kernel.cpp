@@ -22,8 +22,98 @@
 namespace {
 
 constexpr std::uintptr_t UART_BASE = 0x1fe001e0UL; // QEMU LoongArch virt: VIRT_UART_BASE address
+constexpr std::uintptr_t kSysconBase = 0x100e001cUL; // QEMU LoongArch virt: syscon-poweroff MMIO base
 
 static constinit Rocinante::Uart16550 uart(UART_BASE);
+
+namespace Csr {
+	// LoongArch privileged architecture CSR numbering.
+	constexpr std::uint32_t kTlbIndex = 0x10;   // CSR.TLBIDX
+	constexpr std::uint32_t kTlbEntryHigh = 0x11; // CSR.TLBEHI
+	constexpr std::uint32_t kAddressSpaceId = 0x18; // CSR.ASID
+	constexpr std::uint32_t kPgdLow = 0x19;     // CSR.PGDL
+	constexpr std::uint32_t kPgdHigh = 0x1A;    // CSR.PGDH
+	constexpr std::uint32_t kPgd = 0x1B;        // CSR.PGD (read-only)
+	constexpr std::uint32_t kPageWalkControlLow = 0x1C;  // CSR.PWCL
+	constexpr std::uint32_t kPageWalkControlHigh = 0x1D; // CSR.PWCH
+	constexpr std::uint32_t kReducedVirtualAddressConfiguration = 0x1F; // CSR.RVACFG
+
+	constexpr std::uint32_t kTlbRefillEntryAddress = 0x88; // CSR.TLBRENTRY
+	constexpr std::uint32_t kTlbRefillBadVirtualAddress = 0x89; // CSR.TLBRBADV
+	constexpr std::uint32_t kTlbRefillExceptionReturnAddress = 0x8A; // CSR.TLBRERA
+	constexpr std::uint32_t kTlbRefillEntryHigh = 0x8E; // CSR.TLBREHI
+} // namespace Csr
+
+template<std::uint32_t CsrNumber>
+static inline std::uint64_t ReadCsr() {
+	std::uint64_t value;
+	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(CsrNumber));
+	return value;
+}
+
+static const char* ExceptionCodeToString(std::uint64_t exception_code, std::uint64_t exception_subcode) {
+	// Table 21 "Table of exception encoding" (LoongArch Privileged Architecture).
+	switch (exception_code) {
+		case 0x0: return "INT";
+		case 0x1: return "PIL";
+		case 0x2: return "PIS";
+		case 0x3: return "PIF";
+		case 0x4: return "PME";
+		case 0x5: return "PNR";
+		case 0x6: return "PNX";
+		case 0x7: return "PPI";
+		case 0x8:
+			if (exception_subcode == 0) return "ADEF";
+			if (exception_subcode == 1) return "ADEM";
+			return "AD";
+		case 0x9: return "ALE";
+		case 0xA: return "BCE";
+		case 0xB: return "SYS";
+		case 0x0c: return "BRK";
+		case 0xD: return "INE";
+		case 0xE: return "IPE";
+		case 0xF: return "FPD";
+		case 0x10: return "SXD";
+		case 0x11: return "ASXD";
+		case 0x12:
+			if (exception_subcode == 0) return "FPE";
+			if (exception_subcode == 1) return "VFPE";
+			return "FPE";
+		default: return "UNKNOWN";
+	}
+}
+
+static void DumpMappedTranslationCsrs(const Rocinante::Uart16550& uart) {
+	const std::uint64_t pgdl = ReadCsr<Csr::kPgdLow>();
+	const std::uint64_t pgdh = ReadCsr<Csr::kPgdHigh>();
+	const std::uint64_t pgd = ReadCsr<Csr::kPgd>();
+	const std::uint64_t pwcl = ReadCsr<Csr::kPageWalkControlLow>();
+	const std::uint64_t pwch = ReadCsr<Csr::kPageWalkControlHigh>();
+	const std::uint64_t rvacfg = ReadCsr<Csr::kReducedVirtualAddressConfiguration>();
+
+	uart.puts("PGDL:  "); uart.write_hex_u64(pgdl); uart.putc('\n');
+	uart.puts("PGDH:  "); uart.write_hex_u64(pgdh); uart.putc('\n');
+	uart.puts("PGD:   "); uart.write_hex_u64(pgd); uart.putc('\n');
+	uart.puts("PWCL:  "); uart.write_hex_u64(pwcl); uart.putc('\n');
+	uart.puts("PWCH:  "); uart.write_hex_u64(pwch); uart.putc('\n');
+	uart.puts("RVACFG:"); uart.write_hex_u64(rvacfg); uart.putc('\n');
+}
+
+static void DumpTlbRefillCsrsIfActive(const Rocinante::Uart16550& uart) {
+	const std::uint64_t tlbrera = ReadCsr<Csr::kTlbRefillExceptionReturnAddress>();
+	const bool is_tlbr = (tlbrera & 1ull) != 0;
+	if (!is_tlbr) return;
+
+	const std::uint64_t tlbrbadv = ReadCsr<Csr::kTlbRefillBadVirtualAddress>();
+	const std::uint64_t tlbrehi = ReadCsr<Csr::kTlbRefillEntryHigh>();
+	const std::uint64_t tlbrentry = ReadCsr<Csr::kTlbRefillEntryAddress>();
+
+	uart.puts("TLBR:  IsTLBR=1\n");
+	uart.puts("TLBRENTRY:"); uart.write_hex_u64(tlbrentry); uart.putc('\n');
+	uart.puts("TLBRERA:  "); uart.write_hex_u64(tlbrera); uart.putc('\n');
+	uart.puts("TLBRBADV: "); uart.write_hex_u64(tlbrbadv); uart.putc('\n');
+	uart.puts("TLBREHI:  "); uart.write_hex_u64(tlbrehi); uart.putc('\n');
+}
 
 static const char* BootMemoryRegionTypeToString(Rocinante::Memory::BootMemoryRegion::Type type) {
 	switch (type) {
@@ -112,7 +202,6 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	// - offset = 0, value = 0x34
 	// Writing that byte triggers a QEMU shutdown event, and QEMU exits by default
 	// (-action shutdown=poweroff).
-	constexpr std::uintptr_t kSysconBase = 0x100e001cUL;
 	constexpr std::uintptr_t kPoweroffOffset = 0;
 	constexpr std::uint8_t kPoweroffValue = 0x34;
 
@@ -156,15 +245,9 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 
 	if (exception_code == kExceptionCodeBreak) {
 		uart.puts("\n*** TRAP: BRK ***\n");
-		uart.puts("ERA:   ");
-		uart.write(Rocinante::to_string(tf->exception_return_address));
-		uart.putc('\n');
-		uart.puts("ESTAT: ");
-		uart.write(Rocinante::to_string(tf->exception_status));
-		uart.putc('\n');
-		uart.puts("SUB:   ");
-		uart.write(Rocinante::to_string(exception_subcode));
-		uart.putc('\n');
+		uart.puts("ERA:   "); uart.write_hex_u64(tf->exception_return_address); uart.putc('\n');
+		uart.puts("ESTAT: "); uart.write_hex_u64(tf->exception_status); uart.putc('\n');
+		uart.puts("SUB:   "); uart.write_dec_u64(exception_subcode); uart.putc('\n');
 
 		// Skip the BREAK instruction so we can prove ERTN return works.
 		// LoongArch instructions are 32-bit.
@@ -174,20 +257,26 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	#endif
 
 	uart.puts("\n*** TRAP ***\n");
-	uart.puts("ERA:   ");
-	uart.write(Rocinante::to_string(tf->exception_return_address));
-	uart.putc('\n');
-	uart.puts("ESTAT: ");
-	uart.write(Rocinante::to_string(tf->exception_status));
-	uart.putc('\n');
-	uart.puts("BADV:  ");
-	uart.write(Rocinante::to_string(tf->bad_virtual_address));
-	uart.putc('\n');
-	uart.puts("EXC:   ");
-	uart.write(Rocinante::to_string(exception_code));
-	uart.puts(" SUB: ");
-	uart.write(Rocinante::to_string(exception_subcode));
-	uart.putc('\n');
+	uart.puts("TYPE:  ");
+	uart.puts(ExceptionCodeToString(exception_code, exception_subcode));
+	uart.puts(" (EXC="); uart.write_hex_u64(exception_code);
+	uart.puts(" SUB="); uart.write_hex_u64(exception_subcode);
+	uart.puts(")\n");
+
+	uart.puts("ERA:   "); uart.write_hex_u64(tf->exception_return_address); uart.putc('\n');
+	uart.puts("ESTAT: "); uart.write_hex_u64(tf->exception_status); uart.putc('\n');
+	uart.puts("BADV:  "); uart.write_hex_u64(tf->bad_virtual_address); uart.putc('\n');
+	uart.puts("CRMD:  "); uart.write_hex_u64(tf->current_mode_information); uart.putc('\n');
+	uart.puts("PRMD:  "); uart.write_hex_u64(tf->previous_mode_information); uart.putc('\n');
+	uart.puts("ECFG:  "); uart.write_hex_u64(tf->exception_configuration); uart.putc('\n');
+
+	DumpTlbRefillCsrsIfActive(uart);
+	DumpMappedTranslationCsrs(uart);
+
+	// A few extra CSRs that are useful when debugging translation state.
+	uart.puts("ASID:  "); uart.write_hex_u64(ReadCsr<Csr::kAddressSpaceId>()); uart.putc('\n');
+	uart.puts("TLBIDX:"); uart.write_hex_u64(ReadCsr<Csr::kTlbIndex>()); uart.putc('\n');
+	uart.puts("TLBEHI:"); uart.write_hex_u64(ReadCsr<Csr::kTlbEntryHigh>()); uart.putc('\n');
 
 	halt();
 }
@@ -260,7 +349,9 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 				// Flaw / bring-up gap:
 				// - We have not yet validated our page table entry encoding against the
 				//   LoongArch privileged spec end-to-end.
-				// - We also do not yet establish a full physmap or a higher-half kernel.
+					// - We do not yet establish a higher-half kernel. We do, however, build a
+					//   minimal higher-half physmap so future paging code can access physical
+					//   frames via a stable VA once paging is enabled.
 				// - Therefore, default behavior is to build page tables and print diagnostics
 				//   only; enabling paging requires opting in.
 				#if defined(ROCINANTE_PAGING_BRINGUP)
@@ -326,6 +417,105 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 						)) {
 							uart.puts("Paging bring-up: failed to map kernel identity range\n");
 						} else {
+							// Identity-map the UART and syscon MMIO pages so existing raw MMIO pointers
+							// remain usable immediately after paging is enabled.
+							//
+							// Correctness pitfall (per plan / LoongArch spec): caching attributes.
+							// These must be mapped as an uncached/strongly-ordered memory type, or
+							// early UART/debug output can become flaky.
+							Rocinante::Memory::Paging::PagePermissions mmio_permissions{
+								.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
+								.execute = Rocinante::Memory::Paging::ExecutePermissions::NoExecute,
+								.cache = Rocinante::Memory::Paging::CacheMode::StrongUncached,
+								.global = true,
+							};
+
+							const std::uintptr_t uart_page_base =
+								UART_BASE & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+							if (!Rocinante::Memory::Paging::MapRange4KiB(
+								&pmm,
+								root,
+								uart_page_base,
+								uart_page_base,
+								Rocinante::Memory::Paging::kPageSizeBytes,
+								mmio_permissions,
+								address_bits
+							)) {
+								uart.puts("Paging bring-up: failed to map UART MMIO page\n");
+							}
+
+							const std::uintptr_t syscon_page_base =
+								kSysconBase & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+							if (!Rocinante::Memory::Paging::MapRange4KiB(
+								&pmm,
+								root,
+								syscon_page_base,
+								syscon_page_base,
+								Rocinante::Memory::Paging::kPageSizeBytes,
+								mmio_permissions,
+								address_bits
+							)) {
+								uart.puts("Paging bring-up: failed to map syscon-poweroff MMIO page\n");
+							}
+
+							// Minimal physmap: map a small linear window of physical RAM into the
+							// higher half so page-table pages and PMM frames can be accessed by VA
+							// once paging is enabled.
+							//
+							// Bring-up policy:
+							// - Keep this deliberately small at first.
+							// - Start from the PMM tracked base (not necessarily 0).
+							static constexpr std::size_t kBootstrapPhysMapSizeBytes = 16u * 1024u * 1024u; // 16 MiB
+
+							const std::uintptr_t physmap_physical_base = pmm.TrackedPhysicalBase();
+							const std::uintptr_t physmap_physical_limit = pmm.TrackedPhysicalLimit();
+							std::size_t physmap_size_bytes = 0;
+							if (physmap_physical_limit > physmap_physical_base) {
+								const std::size_t tracked_size_bytes =
+									static_cast<std::size_t>(physmap_physical_limit - physmap_physical_base);
+								physmap_size_bytes = (tracked_size_bytes < kBootstrapPhysMapSizeBytes)
+									? tracked_size_bytes
+									: kBootstrapPhysMapSizeBytes;
+								physmap_size_bytes &= ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+							}
+
+							if (physmap_size_bytes == 0) {
+								uart.puts("Paging bring-up: no tracked RAM for physmap; skipping physmap build\n");
+							} else {
+								const std::uintptr_t physmap_virtual_base =
+									Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(
+										physmap_physical_base,
+										address_bits.virtual_address_bits
+									);
+
+								Rocinante::Memory::Paging::PagePermissions physmap_permissions{
+									.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
+									.execute = Rocinante::Memory::Paging::ExecutePermissions::NoExecute,
+									.cache = Rocinante::Memory::Paging::CacheMode::CoherentCached,
+									.global = true,
+								};
+
+								if (!Rocinante::Memory::Paging::MapRange4KiB(
+									&pmm,
+									root,
+									physmap_virtual_base,
+									physmap_physical_base,
+									physmap_size_bytes,
+									physmap_permissions,
+									address_bits
+								)) {
+									uart.puts("Paging bring-up: failed to map bootstrap physmap window\n");
+								} else {
+									uart.puts("Paging bring-up: physmap virt_base=");
+									uart.write(Rocinante::to_string(physmap_virtual_base));
+									uart.puts(" phys=[");
+									uart.write(Rocinante::to_string(physmap_physical_base));
+									uart.puts(", ");
+									uart.write(Rocinante::to_string(physmap_physical_base + physmap_size_bytes));
+									uart.puts(")\n");
+								}
+							}
+
 							uart.puts("Paging bring-up: root_pt_phys=");
 							uart.write(Rocinante::to_string(root.root_physical_address));
 							uart.puts(" kernel_phys=[");

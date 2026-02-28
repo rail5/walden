@@ -70,3 +70,39 @@ char Rocinante::Uart16550::getc() const {
 void Rocinante::Uart16550::write(Rocinante::String str) const {
 	puts(str.c_str());
 }
+
+void Rocinante::Uart16550::write_hex_u64(std::uint64_t value) const {
+	// Fixed-width hex formatting: 0x + 16 nybbles.
+	// This is intentionally allocation-free for trap safety.
+	static constexpr char kHexDigits[] = "0123456789abcdef";
+	static constexpr int kBitsPerNybble = 4;
+	static constexpr int kNybblesInU64 = 16;
+	static constexpr int kTopNybbleShift = (kNybblesInU64 - 1) * kBitsPerNybble;
+
+	puts("0x");
+	for (int shift = kTopNybbleShift; shift >= 0; shift -= kBitsPerNybble) {
+		const std::uint8_t nybble = static_cast<std::uint8_t>((value >> shift) & 0xFu);
+		putc(kHexDigits[nybble]);
+	}
+}
+
+void Rocinante::Uart16550::write_dec_u64(std::uint64_t value) const {
+	// Minimal unsigned decimal formatting.
+	// Max digits in u64 is 20.
+	char buffer[21];
+	int pos = 0;
+
+	if (value == 0) {
+		putc('0');
+		return;
+	}
+
+	while (value != 0 && pos < static_cast<int>(sizeof(buffer))) {
+		buffer[pos++] = static_cast<char>('0' + (value % 10));
+		value /= 10;
+	}
+
+	for (int i = pos - 1; i >= 0; i--) {
+		putc(buffer[i]);
+	}
+}

@@ -112,6 +112,20 @@ static void Test_Traps_BREAK_EntersAndReturns(TestContext* ctx) {
 	ROCINANTE_EXPECT_EQ_U64(ctx, BreakTrapCount(), 1);
 }
 
+static void Test_Traps_INE_UndefinedInstruction_IsObserved(TestContext* ctx) {
+	ResetTrapObservations();
+
+	// Table 21: EXCCODE 0xD => INE (Instruction Non-defined Exception).
+	static constexpr std::uint64_t kExceptionCodeIne = 0xD;
+	ArmExpectedTrap(kExceptionCodeIne);
+
+	// Emit an instruction encoding that is not defined.
+	asm volatile(".word 0xffffffff" ::: "memory");
+
+	ROCINANTE_EXPECT_TRUE(ctx, ExpectedTrapObserved());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapExceptionCode(), kExceptionCodeIne);
+}
+
 static void Test_Interrupts_TimerIRQ_DeliversAndClears(TestContext* ctx) {
 	ResetTrapObservations();
 
@@ -355,6 +369,7 @@ extern const TestCase g_test_cases[] = {
 	{"CPUCFG.FakeBackend.DecodesWord1", &Test_CPUCFG_FakeBackend_DecodesWord1},
 	{"CPUCFG.FakeBackend.CachesWords", &Test_CPUCFG_FakeBackend_CachesWords},
 	{"Traps.BREAK.EntersAndReturns", &Test_Traps_BREAK_EntersAndReturns},
+	{"Traps.INE.UndefinedInstruction.IsObserved", &Test_Traps_INE_UndefinedInstruction_IsObserved},
 	{"Interrupts.TimerIRQ.DeliversAndClears", &Test_Interrupts_TimerIRQ_DeliversAndClears},
 	{"Memory.Paging.MapTranslateUnmap", &Test_Paging_MapTranslateUnmap},
 	{"Memory.Paging.RespectsVALENAndPALEN", &Test_Paging_RespectsVALENAndPALEN},

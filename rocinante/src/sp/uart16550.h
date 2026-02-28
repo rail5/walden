@@ -108,6 +108,13 @@ class Uart16550 final {
 		char getc() const;
 
 		void write(Rocinante::String str) const;
+
+		// Allocation-free printing helpers.
+		//
+		// These are safe to use from trap/exception contexts where allocating
+		// from the kernel heap could recurse or fail.
+		void write_hex_u64(std::uint64_t value) const;
+		void write_dec_u64(std::uint64_t value) const;
 };
 
 } // namespace Rocinante

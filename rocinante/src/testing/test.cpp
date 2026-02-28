@@ -18,6 +18,16 @@ namespace {
 static volatile std::uint32_t g_break_trap_count = 0;
 static volatile bool g_timer_interrupt_observed = false;
 
+static volatile bool g_expected_trap_armed = false;
+static volatile bool g_expected_trap_observed = false;
+static volatile std::uint64_t g_expected_exception_code = 0;
+static volatile std::uint64_t g_expected_exception_subcode = 0;
+
+static volatile std::uint64_t g_observed_exception_code = 0;
+static volatile std::uint64_t g_observed_exception_subcode = 0;
+static volatile std::uint64_t g_observed_era = 0;
+static volatile std::uint64_t g_observed_badv = 0;
+
 // LoongArch instructions are fixed-width 32-bit.
 static constexpr std::uint64_t kInstructionSizeBytes = 4;
 
@@ -37,24 +47,19 @@ static void PrintU64(TestContext* ctx, std::uint64_t v) {
 	ctx->uart->write(Rocinante::to_string(v));
 }
 
-static void PrintHexU64(TestContext* ctx, std::uint64_t v) {
-	// Minimal hex printing: 0x + 16 nybbles. No allocations.
-	static constexpr char kHexDigits[] = "0123456789abcdef";
-	static constexpr int kBitsPerNybble = 4;
-	static constexpr int kNybblesInU64 = 16;
-	static constexpr int kTopNybbleShift = (kNybblesInU64 - 1) * kBitsPerNybble;
-	ctx->uart->puts("0x");
-	for (int shift = kTopNybbleShift; shift >= 0; shift -= kBitsPerNybble) {
-		const std::uint8_t nybble = static_cast<std::uint8_t>((v >> shift) & 0xFu);
-		ctx->uart->putc(kHexDigits[nybble]);
-	}
-}
-
 } // namespace
 
 void ResetTrapObservations() {
 	g_break_trap_count = 0;
 	g_timer_interrupt_observed = false;
+	g_expected_trap_armed = false;
+	g_expected_trap_observed = false;
+	g_expected_exception_code = 0;
+	g_expected_exception_subcode = 0;
+	g_observed_exception_code = 0;
+	g_observed_exception_subcode = 0;
+	g_observed_era = 0;
+	g_observed_badv = 0;
 }
 
 std::uint32_t BreakTrapCount() {
@@ -65,10 +70,37 @@ bool TimerInterruptObserved() {
 	return g_timer_interrupt_observed;
 }
 
+void ArmExpectedTrap(std::uint64_t exception_code, std::uint64_t exception_subcode) {
+	g_expected_exception_code = exception_code;
+	g_expected_exception_subcode = exception_subcode;
+	g_expected_trap_observed = false;
+	g_expected_trap_armed = true;
+}
+
+bool ExpectedTrapObserved() {
+	return g_expected_trap_observed;
+}
+
+std::uint64_t ExpectedTrapExceptionCode() {
+	return g_observed_exception_code;
+}
+
+std::uint64_t ExpectedTrapExceptionSubCode() {
+	return g_observed_exception_subcode;
+}
+
+std::uint64_t ExpectedTrapEra() {
+	return g_observed_era;
+}
+
+std::uint64_t ExpectedTrapBadVaddr() {
+	return g_observed_badv;
+}
+
 bool HandleTrap(
 	TrapFrame* tf,
 	std::uint64_t exception_code,
-	std::uint64_t /*exception_subcode*/,
+	std::uint64_t exception_subcode,
 	std::uint64_t interrupt_status) {
 	// LoongArch exceptions are reported via CSR.ESTAT (Exception Status).
 	//
@@ -98,6 +130,25 @@ bool HandleTrap(
 		// must copy the updated value back into CSR.ERA before executing ERTN.
 		tf->exception_return_address += kInstructionSizeBytes;
 		return true;
+	}
+
+	if (g_expected_trap_armed) {
+		const bool subcode_matches =
+			(g_expected_exception_subcode == kAnyExceptionSubcode) ||
+			(exception_subcode == g_expected_exception_subcode);
+		if (exception_code == g_expected_exception_code && subcode_matches) {
+			g_observed_exception_code = exception_code;
+			g_observed_exception_subcode = exception_subcode;
+			g_observed_era = tf->exception_return_address;
+			g_observed_badv = tf->bad_virtual_address;
+
+			g_expected_trap_observed = true;
+			g_expected_trap_armed = false;
+
+			// Skip the faulting instruction.
+			tf->exception_return_address += kInstructionSizeBytes;
+			return true;
+		}
 	}
 
 	return false;
@@ -147,9 +198,9 @@ void ExpectEqU64(
 	Print(ctx, ")\n");
 
 	Print(ctx, "  actual:   ");
-	PrintHexU64(ctx, actual);
+	ctx->uart->write_hex_u64(actual);
 	Print(ctx, "\n  expected: ");
-	PrintHexU64(ctx, expected);
+	ctx->uart->write_hex_u64(expected);
 	Print(ctx, "\n");
 }
 

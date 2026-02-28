@@ -120,7 +120,6 @@ static std::uint64_t LeafFlagsForPermissions(PagePermissions permissions) {
 	if (permissions.access == AccessPermissions::ReadWrite) {
 		flags |= PteBits::kWrite;
 		flags |= PteBits::kDirty;
-		flags |= PteBits::kModified;
 	}
 
 	if (permissions.execute == ExecutePermissions::NoExecute) {

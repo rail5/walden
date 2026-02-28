@@ -57,6 +57,16 @@ static constexpr std::uint64_t kPageBaseMask = ~kPageOffsetMask;
  * we actively use in early bring-up.
  */
 namespace PteBits {
+	// LoongArch page-table entry bit positions (LA64).
+	//
+	// Source of truth:
+	// - LoongArch-Vol1-EN.html, Section 5.4.5
+	//   Figure 8: "Table entry format for common pages" (4 KiB)
+	//   Figure 9: "Table entry format for huge pages"
+	//
+	// For early bring-up we only build common (4 KiB) page mappings. We still
+	// define the high-bit permission fields because they affect address masking.
+	//
 	// Used by TLB hardware.
 	static constexpr std::uint64_t kValid = (1ull << 0);
 	static constexpr std::uint64_t kDirty = (1ull << 1);
@@ -65,15 +75,14 @@ namespace PteBits {
 	static constexpr std::uint64_t kCacheShift = 4;
 	static constexpr std::uint64_t kCacheMask = (3ull << kCacheShift);
 	static constexpr std::uint64_t kGlobal = (1ull << 6);
-
-	// Used by software.
 	static constexpr std::uint64_t kPresent = (1ull << 7);
 	static constexpr std::uint64_t kWrite = (1ull << 8);
-	static constexpr std::uint64_t kModified = (1ull << 9);
 
-	// 64-bit-only bits.
+	// 64-bit-only permission bits.
+	// Spec naming: NR = non-readable, NX = non-executable, RPLV = restrict PLV check.
 	static constexpr std::uint64_t kNoRead = (1ull << 61);
 	static constexpr std::uint64_t kNoExecute = (1ull << 62);
+	static constexpr std::uint64_t kRestrictPrivilegeLevel = (1ull << 63);
 }
 
 enum class CacheMode : std::uint8_t {
