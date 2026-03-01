@@ -47,7 +47,9 @@ Further:
   - Etc
 - **Do not write "vibe" solutions.**
   - Refer to the LoongArch64 spec and hardware manuals, not to "yeah I reckon" or "this looks about right to me."
+  - Spec and manuals are included in this repository under the `spec/` directory as HTML files (stored using `git lfs`).
   - If the code relies on a particular hardware behavior, document that behavior and the source of your understanding (e.g., "Loongson 3A5000 manual, section 4.2.1, states that...").
+  - Words like "typically," "generally," and "probably" are **not** the kind of words I want to see in a kernel.
 
 [rocinante/src/sp/cpucfg.h](rocinante/src/sp/cpucfg.h) and [rocinante/src/sp/uart16550.h](rocinante/src/sp/uart16550.h) are decent examples of these principles in action.
 
