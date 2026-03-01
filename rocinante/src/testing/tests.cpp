@@ -40,6 +40,10 @@ static inline std::uint64_t ReadTimeCounterTicks() {
 // - Page-aligned.
 static constexpr std::uintptr_t kPagingHwScratchVirtualPageBase = 0x0000000100000000ull; // 4 GiB
 
+static std::uintptr_t g_paging_hw_root_page_table_physical = 0;
+static std::uint8_t g_paging_hw_virtual_address_bits = 0;
+static std::uint8_t g_paging_hw_physical_address_bits = 0;
+
 static std::uintptr_t g_paging_hw_higher_half_stack_guard_virtual_base = 0;
 static std::uintptr_t g_paging_hw_higher_half_stack_top = 0;
 
@@ -464,6 +468,15 @@ static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
 
 	const auto root = AllocateRootPageTable(&pmm);
 	ROCINANTE_EXPECT_TRUE(ctx, root.has_value());
+	if (!root.has_value()) return;
+
+	// Expose the paging configuration to later paging-hardware tests.
+	//
+	// Suite contract: the paging bring-up smoke test is the one that permanently
+	// enables paging for the remainder of the run.
+	g_paging_hw_root_page_table_physical = root.value().root_physical_address;
+	g_paging_hw_virtual_address_bits = address_bits.virtual_address_bits;
+	g_paging_hw_physical_address_bits = address_bits.physical_address_bits;
 
 	const PagePermissions kernel_permissions{
 		.access = AccessPermissions::ReadWrite,
@@ -543,6 +556,34 @@ static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
 		},
 		address_bits));
 
+	// Map a physmap window that covers the PMM allocation pool.
+	//
+	// Correctness requirement:
+	// Once paging is enabled, software must not dereference physical addresses as
+	// pointers. The paging builder/walker accesses page-table pages via the
+	// physmap in mapped mode.
+	//
+	// Therefore, the physmap must cover any physical pages that may hold page
+	// tables (root + intermediate levels), which are allocated from the PMM pool.
+	const std::uintptr_t physmap_virtual_base =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(kUsableBase, address_bits.virtual_address_bits);
+
+	const PagePermissions physmap_permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	ROCINANTE_EXPECT_TRUE(ctx, MapRange4KiB(
+		&pmm,
+		root.value(),
+		physmap_virtual_base,
+		kUsableBase,
+		kUsableSizeBytes,
+		physmap_permissions,
+		address_bits));
+
 	// Map a higher-half stack region with a guard page below it.
 	//
 	// Purpose:
@@ -614,6 +655,127 @@ static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
 	*scratch_virtual_u64 = 0xaabbccddeeff0011ull;
 	const auto observed2 = *reinterpret_cast<volatile std::uint64_t*>(kScratchVirtualPageBase);
 	ROCINANTE_EXPECT_EQ_U64(ctx, observed2, 0xaabbccddeeff0011ull);
+
+	// Post-paging self-check: mapping a new page must work in mapped mode.
+	//
+	// This exercises the software paging builder while paging is enabled.
+	// The builder must access page-table pages through the physmap.
+	static constexpr std::uintptr_t kPostPagingVirtualPageBase =
+		kPagingHwScratchVirtualPageBase + (2 * Rocinante::Memory::Paging::kPageSizeBytes);
+	static_assert((kPostPagingVirtualPageBase % Rocinante::Memory::Paging::kPageSizeBytes) == 0);
+
+	const auto post_paging_page = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, post_paging_page.has_value());
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(
+		&pmm,
+		root.value(),
+		kPostPagingVirtualPageBase,
+		post_paging_page.value(),
+		PagePermissions{
+			.access = AccessPermissions::ReadWrite,
+			.execute = ExecutePermissions::NoExecute,
+			.cache = CacheMode::CoherentCached,
+			.global = true,
+		},
+		address_bits));
+
+	auto* post_paging_virtual_u64 = reinterpret_cast<volatile std::uint64_t*>(kPostPagingVirtualPageBase);
+	*post_paging_virtual_u64 = 0x0ddc0ffeebadf00dull;
+	ROCINANTE_EXPECT_EQ_U64(ctx, *post_paging_virtual_u64, 0x0ddc0ffeebadf00dull);
+}
+
+static void Test_PagingHw_PostPaging_MapUnmap_Faults(TestContext* ctx) {
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapPage4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::PageTableRoot;
+	using Rocinante::Memory::Paging::UnmapPage4KiB;
+
+	// This test runs after paging has been enabled.
+	// It proves that we can modify mappings in mapped mode, then unmap and observe
+	// a paging fault after invalidating the TLB.
+
+	// LoongArch EXCCODE values (Table 21):
+	// - 0x2 => PIS: page invalid for store
+	static constexpr std::uint64_t kExceptionCodePis = 0x2;
+
+	// Sanity check: paging must be enabled (CRMD.PG=1, CRMD.DA=0).
+	static constexpr std::uint32_t kCsrCrmd = 0x0;
+	static constexpr std::uint64_t kCrmdPagingEnable = (1ull << 4);
+	static constexpr std::uint64_t kCrmdDirectAddressingEnable = (1ull << 3);
+	std::uint64_t crmd = 0;
+	asm volatile("csrrd %0, %1" : "=r"(crmd) : "i"(kCsrCrmd));
+	if ((crmd & kCrmdPagingEnable) == 0 || (crmd & kCrmdDirectAddressingEnable) != 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_root_page_table_physical != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_virtual_address_bits != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_physical_address_bits != 0);
+	if (g_paging_hw_root_page_table_physical == 0 || g_paging_hw_virtual_address_bits == 0 || g_paging_hw_physical_address_bits == 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = g_paging_hw_virtual_address_bits,
+		.physical_address_bits = g_paging_hw_physical_address_bits,
+	};
+
+	const PageTableRoot root{.root_physical_address = g_paging_hw_root_page_table_physical};
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+
+	static constexpr std::uintptr_t kPostPagingMapUnmapVirtualPageBase =
+		kPagingHwScratchVirtualPageBase + (3 * PhysicalMemoryManager::kPageSizeBytes);
+	static_assert((kPostPagingMapUnmapVirtualPageBase % Rocinante::Memory::Paging::kPageSizeBytes) == 0);
+
+	const auto page_or = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, page_or.has_value());
+	if (!page_or.has_value()) return;
+
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(
+		&pmm,
+		root,
+		kPostPagingMapUnmapVirtualPageBase,
+		page_or.value(),
+		PagePermissions{
+			.access = AccessPermissions::ReadWrite,
+			.execute = ExecutePermissions::NoExecute,
+			.cache = CacheMode::CoherentCached,
+			.global = true,
+		},
+		address_bits));
+
+	// Invalidate the TLB after changing the mapping.
+	//
+	// LoongArch TLB entries are dual-page: one TLB entry covers an even/odd page
+	// pair, with the even page in TLBELO0 and the odd page in TLBELO1.
+	// Spec anchor: LoongArch-Vol1-EN.html, Section 7.5.3 (TLBELO0/TLBELO1).
+	//
+	// This test maps the +3 page. If an earlier TLBR refill populated the TLB
+	// entry for the (+2,+3) pair while +3 was unmapped, the cached odd half can
+	// still be invalid. Flushing the TLB forces hardware to observe the updated
+	// page tables on first access.
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+
+	auto* mapped_u64 = reinterpret_cast<volatile std::uint64_t*>(kPostPagingMapUnmapVirtualPageBase);
+	*mapped_u64 = 0x55aa55aa55aa55aaull;
+	ROCINANTE_EXPECT_EQ_U64(ctx, *mapped_u64, 0x55aa55aa55aa55aaull);
+
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(root, kPostPagingMapUnmapVirtualPageBase, address_bits));
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+
+	ArmExpectedTrap(kExceptionCodePis);
+	const std::uint64_t store_value = 0x0123456789abcdefull;
+	asm volatile("st.d %0, %1, 0" :: "r"(store_value), "r"(kPostPagingMapUnmapVirtualPageBase) : "memory");
+	ROCINANTE_EXPECT_TRUE(ctx, ExpectedTrapObserved());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapExceptionCode(), kExceptionCodePis);
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapBadVaddr(), kPostPagingMapUnmapVirtualPageBase);
 }
 
 static void Test_PagingHw_HigherHalfStack_GuardPageFaults(TestContext* ctx) {
@@ -683,9 +845,9 @@ static void Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV(TestContext* ctx) 
 	// Choose a canonical low-half virtual address that is provably unmapped.
 	//
 	// Suite contract:
-	// - The paging smoke test maps exactly one scratch page at
-	//   kPagingHwScratchVirtualPageBase.
-	// - It does not map the immediately-adjacent page.
+	// - The paging smoke test maps a scratch page at kPagingHwScratchVirtualPageBase.
+	// - It maps another scratch page at +2 pages.
+	// - It does not map the immediately-adjacent page at +1 page.
 	static constexpr std::uintptr_t kFaultVirtualAddress =
 		kPagingHwScratchVirtualPageBase + Rocinante::Memory::Paging::kPageSizeBytes;
 	static_assert((kFaultVirtualAddress % Rocinante::Memory::Paging::kPageSizeBytes) == 0);
@@ -720,6 +882,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &Test_PMM_RespectsReservedKernelAndDTB},
 	{"Memory.PagingHw.EnablePaging.TlbRefillSmoke", &Test_PagingHw_EnablePaging_TlbRefillSmoke},
 	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV},
+	{"Memory.PagingHw.PostPaging.MapUnmap.Faults", &Test_PagingHw_PostPaging_MapUnmap_Faults},
 	{"Memory.PagingHw.HigherHalfStack.GuardPageFaults", &Test_PagingHw_HigherHalfStack_GuardPageFaults},
 };
 
