@@ -6,6 +6,7 @@
 #include "paging.h"
 
 #include <src/memory/pmm.h>
+#include <src/memory/virtual_layout.h>
 #include <src/sp/cpucfg.h>
 
 extern "C" void* memset(void* destination, int byte_value, std::size_t byte_count);
@@ -13,6 +14,34 @@ extern "C" void* memset(void* destination, int byte_value, std::size_t byte_coun
 namespace Rocinante::Memory::Paging {
 
 namespace {
+
+// LoongArch privileged architecture: CSR.CRMD (Current Mode Information).
+//
+// Spec anchor:
+// - LoongArch-Vol1-EN.html, Section 5.2 (Virtual Address Space and Address Translation Mode)
+//   - CRMD.DA=1, CRMD.PG=0 => direct address translation mode
+//   - CRMD.DA=0, CRMD.PG=1 => mapped address translation mode
+namespace Csr {
+	static constexpr std::uint32_t kCurrentModeInformation = 0x0; // CSR.CRMD
+}
+
+namespace CurrentModeInformation {
+	static constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3); // CRMD.DA
+	static constexpr std::uint64_t kPagingEnable = (1ull << 4);           // CRMD.PG
+}
+
+static inline std::uint64_t ReadCurrentModeInformation() {
+	std::uint64_t value;
+	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(Csr::kCurrentModeInformation));
+	return value;
+}
+
+static inline bool IsMappedAddressTranslationMode() {
+	const std::uint64_t crmd = ReadCurrentModeInformation();
+	const bool direct_addressing = (crmd & CurrentModeInformation::kDirectAddressingEnable) != 0;
+	const bool paging = (crmd & CurrentModeInformation::kPagingEnable) != 0;
+	return (!direct_addressing) && paging;
+}
 
 // Software-walker masking policy:
 //
@@ -158,11 +187,28 @@ static std::uintptr_t EntryPhysicalPageBase(std::uint64_t entry, std::uint64_t p
 }
 
 static PageTablePage* PageTablePageFromPhysical(std::uintptr_t physical_page_base) {
-	return reinterpret_cast<PageTablePage*>(physical_page_base);
+	if (!IsMappedAddressTranslationMode()) {
+		// Direct-address mode: physical address equals (low bits of) virtual address.
+		return reinterpret_cast<PageTablePage*>(physical_page_base);
+	}
+
+	// Mapped mode: page-table pages must be accessed through a mapped virtual
+	// address. Rocinante policy is a higher-half linear physmap.
+	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const std::uintptr_t physmap_virtual =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(physical_page_base, virtual_address_bits);
+	return reinterpret_cast<PageTablePage*>(physmap_virtual);
 }
 
 static const PageTablePage* PageTablePageFromPhysicalConst(std::uintptr_t physical_page_base) {
-	return reinterpret_cast<const PageTablePage*>(physical_page_base);
+	if (!IsMappedAddressTranslationMode()) {
+		return reinterpret_cast<const PageTablePage*>(physical_page_base);
+	}
+
+	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const std::uintptr_t physmap_virtual =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(physical_page_base, virtual_address_bits);
+	return reinterpret_cast<const PageTablePage*>(physmap_virtual);
 }
 
 static bool EnsureNextLevelTable(
