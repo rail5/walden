@@ -210,6 +210,73 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	halt();
 }
 
+[[noreturn]] [[gnu::noinline]] static void PagingBringup_HigherHalfStackContinuation() {
+	// This function is entered via an assembly jump after paging is enabled.
+	// It is the first C++ code we intentionally run with a higher-half stack.
+
+	std::uintptr_t current_pc = 0;
+	asm volatile(
+		"la.local %0, 1f\n"
+		"1:\n"
+		: "=r"(current_pc)
+	);
+
+	std::uintptr_t current_sp = 0;
+	asm volatile("move %0, $sp" : "=r"(current_sp));
+
+	uart.puts("Paging bring-up: higher-half stack continuation entered; pc=");
+	uart.write(Rocinante::to_string(current_pc));
+	uart.putc('\n');
+	uart.puts("Paging bring-up: higher-half stack continuation sp=");
+	uart.write(Rocinante::to_string(current_sp));
+	uart.putc('\n');
+
+	auto& cpucfg = Rocinante::GetCPUCFG();
+
+	Rocinante::String info;
+	info += "Hello, Rocinante!\n";
+	info += "Don the LoongArch64 armor and prepare to ride!\n\n";
+
+	uart.write(info);
+
+	uart.puts("CPU Architecture: ");
+	switch (cpucfg.Arch()) {
+		case Rocinante::CPUCFG::Architecture::SimplifiedLA32:
+			uart.puts("Simplified LA32\n");
+			break;
+		case Rocinante::CPUCFG::Architecture::LA32:
+			uart.puts("LA32\n");
+			break;
+		case Rocinante::CPUCFG::Architecture::LA64:
+			uart.puts("LA64\n");
+			break;
+		case Rocinante::CPUCFG::Architecture::Reserved:
+			uart.puts("Reserved/Unknown\n");
+			break;
+	}
+
+	uart.putc('\n');
+
+	if (cpucfg.MMUSupportsPageMappingMode()) {
+		uart.puts("MMU supports page mapping mode\n");
+	} else {
+		uart.puts("MMU does not support page mapping mode\n");
+	}
+
+	uart.putc('\n');
+
+	uart.puts("Supported virtual address bits (VALEN): ");
+	uart.write(Rocinante::to_string(cpucfg.VirtualAddressBits()));
+	uart.putc('\n');
+	uart.puts("Supported physical address bits (PALEN): ");
+	uart.write(Rocinante::to_string(cpucfg.PhysicalAddressBits()));
+	uart.putc('\n');
+
+	uart.putc('\n');
+
+	halt();
+}
+
 
 } // namespace
 
@@ -432,6 +499,33 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 						)) {
 							uart.puts("Paging bring-up: failed to map kernel identity range\n");
 						} else {
+							// Map a higher-half alias of the kernel image.
+							//
+							// Spec anchor:
+							// - LoongArch Reference Manual Vol 1 (v1.10)
+							//   - Section 7.5.6 (PGDH): higher half is selected when VA[VALEN-1]==1.
+							//   - Section 5.2: mapped address translation mode legality depends on
+							//     the implemented virtual address width (VALEN and optional RVACFG.RDVA).
+							const std::uintptr_t kernel_higher_half_base =
+								Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(address_bits.virtual_address_bits);
+														std::uintptr_t higher_half_stack_top = 0;
+
+							if (!Rocinante::Memory::Paging::MapRange4KiB(
+								&pmm,
+								root,
+								kernel_higher_half_base,
+								kernel_physical_base,
+								map_size_rounded,
+								kernel_permissions,
+								address_bits
+							)) {
+								uart.puts("Paging bring-up: failed to map kernel higher-half alias\n");
+							} else {
+								uart.puts("Paging bring-up: kernel higher-half base=");
+								uart.write(Rocinante::to_string(kernel_higher_half_base));
+								uart.putc('\n');
+							}
+
 							// Identity-map the UART and syscon MMIO pages so existing raw MMIO pointers
 							// remain usable immediately after paging is enabled.
 							//
@@ -471,6 +565,88 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								address_bits
 							)) {
 								uart.puts("Paging bring-up: failed to map syscon-poweroff MMIO page\n");
+							}
+
+							// Allocate and map a higher-half kernel stack region.
+							//
+							// Spec-driven constraint:
+							// For VALEN=N, the lowest canonical higher-half address is
+							// KernelHigherHalfBase. Any address below it is non-canonical and will
+							// fail our VA canonicalization checks.
+							//
+							// Bring-up policy: place the stack just above the kernel higher-half
+							// alias range.
+							//
+							// Guard-page policy:
+							// The stack grows downward, so leave one unmapped guard page below the
+							// mapped stack region.
+							{
+								static constexpr std::size_t kHigherHalfStackGuardPageCount = 1;
+								static constexpr std::size_t kHigherHalfStackMappedPageCount = 4;
+
+								const std::uintptr_t stack_region_base_unaligned =
+									kernel_higher_half_base + map_size_rounded;
+								const std::uintptr_t stack_guard_virtual_base =
+									(stack_region_base_unaligned + (Rocinante::Memory::Paging::kPageSizeBytes - 1)) &
+									~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+								const std::uintptr_t stack_virtual_base =
+									stack_guard_virtual_base + (kHigherHalfStackGuardPageCount * Rocinante::Memory::Paging::kPageSizeBytes);
+								const std::uintptr_t stack_virtual_top =
+									stack_virtual_base + (kHigherHalfStackMappedPageCount * Rocinante::Memory::Paging::kPageSizeBytes);
+
+								Rocinante::Memory::Paging::PagePermissions stack_permissions{
+									.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
+									.execute = Rocinante::Memory::Paging::ExecutePermissions::NoExecute,
+									.cache = Rocinante::Memory::Paging::CacheMode::CoherentCached,
+									.global = true,
+								};
+
+								std::uintptr_t stack_physical_pages[kHigherHalfStackMappedPageCount] = {};
+								bool stack_ok = true;
+
+								for (std::size_t i = 0; i < kHigherHalfStackMappedPageCount; i++) {
+									const auto stack_page_or = pmm.AllocatePage();
+									if (!stack_page_or.has_value()) {
+										uart.puts("Paging bring-up: failed to allocate higher-half stack page\n");
+										stack_ok = false;
+										break;
+									}
+
+									stack_physical_pages[i] = stack_page_or.value();
+									const std::uintptr_t page_virtual = stack_virtual_base + (i * Rocinante::Memory::Paging::kPageSizeBytes);
+									if (!Rocinante::Memory::Paging::MapRange4KiB(
+										&pmm,
+										root,
+										page_virtual,
+										stack_physical_pages[i],
+										Rocinante::Memory::Paging::kPageSizeBytes,
+										stack_permissions,
+										address_bits
+									)) {
+										uart.puts("Paging bring-up: failed to map higher-half stack page\n");
+										uart.puts("Paging bring-up: NOTE: stack mapping failure may leave partial mappings\n");
+										stack_ok = false;
+										break;
+									}
+								}
+
+								if (stack_ok) {
+									higher_half_stack_top = stack_virtual_top;
+									uart.puts("Paging bring-up: higher-half stack mapped; guard_virt_base=");
+									uart.write(Rocinante::to_string(stack_guard_virtual_base));
+									uart.puts(" stack_virt_base=");
+									uart.write(Rocinante::to_string(stack_virtual_base));
+									uart.puts(" stack_virt_top=");
+									uart.write(Rocinante::to_string(stack_virtual_top));
+									uart.puts(" pages=");
+									uart.write(Rocinante::to_string(kHigherHalfStackMappedPageCount));
+									uart.puts(" phys_pages=[");
+									for (std::size_t i = 0; i < kHigherHalfStackMappedPageCount; i++) {
+										if (i != 0) uart.puts(", ");
+										uart.write(Rocinante::to_string(stack_physical_pages[i]));
+									}
+									uart.puts("]\n");
+								}
 							}
 
 							// Minimal physmap: map a small linear window of physical RAM into the
@@ -648,6 +824,48 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								uart.puts("Paging bring-up: enabling paging (CRMD.PG=1, CRMD.DA=0)\n");
 								Rocinante::Memory::PagingHw::EnablePaging();
 								uart.puts("Paging bring-up: paging enabled\n");
+
+								// Switch to the higher-half stack (if mapped) and jump to a fresh
+								// continuation function.
+								//
+								// Spec anchor:
+								// - LoongArch Reference Manual Vol 1 (v1.10)
+								//   - Section 7.5.6 (PGDH): higher half is selected when VA[VALEN-1]==1.
+								{
+									std::uintptr_t old_sp = 0;
+									asm volatile("move %0, $sp" : "=r"(old_sp));
+									const std::uintptr_t new_sp = (higher_half_stack_top != 0)
+										? higher_half_stack_top
+										: old_sp;
+									if (higher_half_stack_top == 0) {
+										uart.puts("Paging bring-up: higher-half stack not available; keeping low SP\n");
+									}
+
+									const std::uintptr_t continuation_low =
+										reinterpret_cast<std::uintptr_t>(&PagingBringup_HigherHalfStackContinuation);
+									const std::uintptr_t continuation_offset = continuation_low - kernel_physical_base;
+									const std::uintptr_t continuation_high = kernel_higher_half_base + continuation_offset;
+
+									uart.puts("Paging bring-up: switching SP from=");
+									uart.write(Rocinante::to_string(old_sp));
+									uart.puts(" to=");
+									uart.write(Rocinante::to_string(new_sp));
+									uart.putc('\n');
+
+									uart.puts("Paging bring-up: jumping to higher-half stack continuation target=");
+									uart.write(Rocinante::to_string(continuation_high));
+									uart.putc('\n');
+
+									asm volatile(
+										"move $sp, %0\n"
+										"jirl $zero, %1, 0\n"
+										"break 0\n"
+										:
+										: "r"(new_sp), "r"(continuation_high)
+										: "memory"
+									);
+									__builtin_unreachable();
+								}
 							}
 						}
 					}

@@ -288,6 +288,8 @@ __exception_entry:
 
 .equ CSR_TLBRBADV, 0x89 // CSR.TLBRBADV (TLB refill bad virtual address)
 
+.equ CSR_TLBRSAVE, 0x8B // CSR.TLBRSAVE (TLB refill exception data save register)
+
 .equ CSR_TLBREHI, 0x8E // CSR.TLBREHI
 .equ CSR_TLBRELO0, 0x8C // CSR.TLBRELO0
 .equ CSR_TLBRELO1, 0x8D // CSR.TLBRELO1
@@ -300,27 +302,68 @@ __rocinante_hex_digits:
 .section .text.trap, "ax"
 #endif
 
+// Dedicated TLB refill stack (direct-addressing-safe).
+//
+// Spec anchor: LoongArch-Vol1-EN.html, Section 6.3.4.
+// During TLBR handling, hardware sets CRMD.DA=1 and CRMD.PG=0, so the refill
+// handler must not touch the interrupted stack if it contains a virtual
+// address (e.g. higher-half kernel stack).
+.section .bss
+.p2align 12
+__tlb_refill_stack:
+	.skip 4096
+__tlb_refill_stack_top:
+	.p2align 3
+__tlb_refill_debug_flags:
+	.skip 8
+.section .text.trap, "ax"
+
 .p2align 12
 __tlb_refill_entry:
-	// Save the temporaries we clobber.
-	addi.d $sp, $sp, -48
-	st.d   $t0, $sp, 0
-	st.d   $t1, $sp, 8
-	st.d   $t2, $sp, 16
-	st.d   $t3, $sp, 24
-	st.d   $t4, $sp, 32
-	st.d   $t5, $sp, 40
+	// TLB refill exception entry runs with CRMD.DA=1 and CRMD.PG=0 (direct
+	// addressing). If the interrupted $sp is a higher-half virtual address, any
+	// attempt to push to it will fault.
+	//
+	// We save one scratch GPR into CSR.TLBRSAVE, then use it to compute a known
+	// low physical refill stack frame and spill the remaining temporaries (and
+	// the interrupted $sp) there before doing any further memory access.
+	//
+	// Spec anchors:
+	// - LoongArch-Vol1-EN.html, Section 6.3.4 (DA=1, PG=0 during TLBR handling)
+	// - LoongArch-Vol1-EN.html, Section 7.5.14 (CSR.TLBRSAVE)
+	// NOTE: Do not use CSR.KS* here.
+	// TLBR can trigger while other exception handlers are running, and those
+	// handlers may already be using CSR.KS* for their own save/restore paths.
+	// Use CSR.TLBRSAVE (TLBR-specific) plus a dedicated low refill stack.
+	csrwr  $t0, CSR_TLBRSAVE
+	la.local $t0, __tlb_refill_stack_top
+	addi.d $t0, $t0, -48
+	st.d   $sp, $t0, 0
+	st.d   $t1, $t0, 8
+	st.d   $t2, $t0, 16
+	st.d   $t3, $t0, 24
+	st.d   $t4, $t0, 32
+	st.d   $t5, $t0, 40
+	move   $sp, $t0
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+// NOTE:
+// These UART breadcrumbs are extremely noisy once paging is enabled and TLBR
+// starts firing frequently (they can interleave with normal UART output).
+// Keep them available for deep paging bring-up, but default them off.
+//
+// Enable by defining ROCINANTE_TLBR_UART_BREADCRUMBS at build time.
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	// Optional single-shot diagnostics.
 	//
-	// Use CSR.KS1 as a debug-only flag indicating we have printed the
-	// page-walk base addresses for this boot.
+	// Use a BSS flag (direct-addressing-safe) to avoid flooding UART.
 	// - $t4 acts as a per-invocation boolean: 1 => print, 0 => skip.
-	csrrd  $t4, CSR_KS1
-	bnez   $t4, 0f
+	la.local $t0, __tlb_refill_debug_flags
+	ld.d   $t1, $t0, 0
+	andi   $t2, $t1, 0x2
+	bnez   $t2, 0f
+	ori    $t1, $t1, 0x2
+	st.d   $t1, $t0, 0
 	li.d   $t4, 1
-	csrwr  $t4, CSR_KS1
 	b      1f
 0:
 	move   $t4, $zero
@@ -339,10 +382,12 @@ __tlb_refill_entry:
 	//   other breadcrumbs unreadable.
 	//
 	// We use CSR.KS0 as a debug-only "have printed TLBRBADV" flag.
-	csrrd  $t0, CSR_KS0
-	bnez   $t0, 1f
-	li.d   $t0, 1
-	csrwr  $t0, CSR_KS0
+	la.local $t0, __tlb_refill_debug_flags
+	ld.d   $t1, $t0, 0
+	andi   $t2, $t1, 0x1
+	bnez   $t2, 1f
+	ori    $t1, $t1, 0x1
+	st.d   $t1, $t0, 0
 
 	li.w   $t2, 'B'
 	st.b   $t2, $t3, 0
@@ -399,7 +444,7 @@ __tlb_refill_entry:
 	or     $t1, $t1, $t0
 	csrwr  $t1, CSR_TLBIDX
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	// UART breadcrumb: configured TLBIDX.
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, 'I'
@@ -409,7 +454,7 @@ __tlb_refill_entry:
 	// Start from the effective page-table root.
 	csrrd  $t0, CSR_PGD
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	// UART breadcrumb: loaded effective page-table root.
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, 'R'
@@ -453,7 +498,7 @@ __tlb_refill_entry:
 	and    $t0, $t3, $t2
 1:
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, '4'
 	st.b   $t2, $t3, 0
@@ -477,7 +522,7 @@ __tlb_refill_entry:
 	and    $t0, $t3, $t2
 2:
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, '3'
 	st.b   $t2, $t3, 0
@@ -504,7 +549,7 @@ __tlb_refill_entry:
 	and    $t0, $t3, $t2
 3:
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, '2'
 	st.b   $t2, $t3, 0
@@ -529,13 +574,13 @@ __tlb_refill_entry:
 	and    $t0, $t3, $t2
 4:
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, '1'
 	st.b   $t2, $t3, 0
 #endif
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	// Single-shot diagnostic: dump the raw even/odd PTE values from the leaf
 	// PTE table page we just reached.
 	//
@@ -632,7 +677,7 @@ pte_dump_done:
 	ldpte  $t0, 0
 	ldpte  $t0, 1
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	// UART breadcrumbs: did LDPTE fetch *present* PTEs?
 	// Print 'v' if V=1, '0' if V=0 for each half.
 	li.d   $t3, UART16550_BASE
@@ -668,7 +713,7 @@ pte_dump_done:
 	csrrd  $t1, CSR_TLBRELO1
 	csrwr  $t1, CSR_TLBELO1
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, 'P'
 	st.b   $t2, $t3, 0
@@ -677,7 +722,7 @@ pte_dump_done:
 	// Fill a TLB entry selected by hardware.
 	tlbfill
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, 'F'
 	st.b   $t2, $t3, 0
@@ -690,5 +735,6 @@ pte_dump_done:
 	ld.d   $t3, $sp, 24
 	ld.d   $t4, $sp, 32
 	ld.d   $t5, $sp, 40
-	addi.d $sp, $sp, 48
+	move   $sp, $t0
+	csrrd  $t0, CSR_TLBRSAVE
 	ertn
