@@ -6,8 +6,6 @@
 #include <src/testing/test.h>
 
 #include <cstddef>
-
-#include <src/helpers/string.h>
 #include <src/sp/uart16550.h>
 #include <src/trap.h>
 
@@ -44,7 +42,7 @@ static void Print(TestContext* ctx, const char* s) {
 }
 
 static void PrintU64(TestContext* ctx, std::uint64_t v) {
-	ctx->uart->write(Rocinante::to_string(v));
+	ctx->uart->write_dec_u64(v);
 }
 
 } // namespace
@@ -228,7 +226,7 @@ int RunAll(Uart16550* uart) {
 			uart->puts("[FAIL] ");
 			uart->puts(ctx.current_test_name);
 			uart->puts(" (failures=");
-			uart->write(Rocinante::to_string(ctx.current_test_failures));
+			uart->write_dec_u64(ctx.current_test_failures);
 			uart->puts(")\n");
 			failed_tests++;
 			ctx.total_failures += ctx.current_test_failures;
@@ -237,10 +235,10 @@ int RunAll(Uart16550* uart) {
 
 	uart->puts("\n=== Test Summary ===\n");
 	uart->puts("Failed test cases: ");
-	uart->write(Rocinante::to_string(failed_tests));
+	uart->write_dec_u64(failed_tests);
 	uart->putc('\n');
 	uart->puts("Total assertion failures: ");
-	uart->write(Rocinante::to_string(ctx.total_failures));
+	uart->write_dec_u64(ctx.total_failures);
 	uart->putc('\n');
 
 	return static_cast<int>(failed_tests);

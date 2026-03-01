@@ -146,7 +146,7 @@ static const char* BootMemoryRegionTypeToString(Rocinante::Memory::BootMemoryReg
 static void PrintBootMemoryMap(const Rocinante::Uart16550& uart, const Rocinante::Memory::BootMemoryMap& map) {
 	uart.puts("Boot memory map (DTB):\n");
 	uart.puts("  Region count: ");
-	uart.write(Rocinante::to_string(map.region_count));
+	uart.write_dec_u64(map.region_count);
 	uart.putc('\n');
 
 	for (std::size_t i = 0; i < map.region_count; i++) {
@@ -154,9 +154,9 @@ static void PrintBootMemoryMap(const Rocinante::Uart16550& uart, const Rocinante
 		uart.puts("  - ");
 		uart.puts(BootMemoryRegionTypeToString(r.type));
 		uart.puts(" base=");
-		uart.write(Rocinante::to_string(r.physical_base));
+		uart.write_dec_u64(r.physical_base);
 		uart.puts(" size_bytes=");
-		uart.write(Rocinante::to_string(r.size_bytes));
+		uart.write_dec_u64(r.size_bytes);
 		uart.putc('\n');
 	}
 }
@@ -164,16 +164,16 @@ static void PrintBootMemoryMap(const Rocinante::Uart16550& uart, const Rocinante
 static void PrintPhysicalMemoryManagerSummary(const Rocinante::Uart16550& uart, const Rocinante::Memory::PhysicalMemoryManager& pmm) {
 	uart.puts("PMM summary:\n");
 	uart.puts("  Tracked physical base:  ");
-	uart.write(Rocinante::to_string(pmm.TrackedPhysicalBase()));
+	uart.write_dec_u64(pmm.TrackedPhysicalBase());
 	uart.putc('\n');
 	uart.puts("  Tracked physical limit: ");
-	uart.write(Rocinante::to_string(pmm.TrackedPhysicalLimit()));
+	uart.write_dec_u64(pmm.TrackedPhysicalLimit());
 	uart.putc('\n');
 	uart.puts("  Total pages: ");
-	uart.write(Rocinante::to_string(pmm.TotalPages()));
+	uart.write_dec_u64(pmm.TotalPages());
 	uart.putc('\n');
 	uart.puts("  Free pages:  ");
-	uart.write(Rocinante::to_string(pmm.FreePages()));
+	uart.write_dec_u64(pmm.FreePages());
 	uart.putc('\n');
 }
 
@@ -245,10 +245,10 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	asm volatile("move %0, $sp" : "=r"(current_sp));
 
 	uart.puts("Paging bring-up: higher-half stack continuation entered; pc=");
-	uart.write(Rocinante::to_string(current_pc));
+	uart.write_dec_u64(current_pc);
 	uart.putc('\n');
 	uart.puts("Paging bring-up: higher-half stack continuation sp=");
-	uart.write(Rocinante::to_string(current_sp));
+	uart.write_dec_u64(current_sp);
 	uart.putc('\n');
 
 	// Higher-half exception entry relocation.
@@ -273,7 +273,7 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 		const std::uintptr_t exception_entry_high = kernel_higher_half_base + (exception_entry_low - kernel_physical_base);
 
 		uart.puts("Paging bring-up: relocating EENTRY/MERRENTRY to entry=");
-		uart.write(Rocinante::to_string(exception_entry_high));
+		uart.write_dec_u64(exception_entry_high);
 		uart.putc('\n');
 
 		Rocinante::Trap::SetGeneralAndMachineErrorExceptionEntryPageBase(exception_entry_high);
@@ -289,9 +289,9 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	// we mapped during paging bring-up.
 	if (g_paging_bringup_heap_virtual_base != 0 && g_paging_bringup_heap_size_bytes != 0) {
 		uart.puts("Paging bring-up: initializing heap after paging; heap_base=");
-		uart.write(Rocinante::to_string(g_paging_bringup_heap_virtual_base));
+		uart.write_dec_u64(g_paging_bringup_heap_virtual_base);
 		uart.puts(" heap_size_bytes=");
-		uart.write(Rocinante::to_string(g_paging_bringup_heap_size_bytes));
+		uart.write_dec_u64(g_paging_bringup_heap_size_bytes);
 		uart.putc('\n');
 
 		Rocinante::Memory::InitHeapAfterPaging(
@@ -300,9 +300,9 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 		);
 
 		uart.puts("Paging bring-up: heap stats after init: total_bytes=");
-		uart.write(Rocinante::to_string(Rocinante::Heap::TotalBytes()));
+		uart.write_dec_u64(Rocinante::Heap::TotalBytes());
 		uart.puts(" free_bytes=");
-		uart.write(Rocinante::to_string(Rocinante::Heap::FreeBytes()));
+		uart.write_dec_u64(Rocinante::Heap::FreeBytes());
 		uart.putc('\n');
 
 		void* p = Rocinante::Heap::Alloc(64, 16);
@@ -345,16 +345,16 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 
 		uart.puts("Paging bring-up: post-paging Translate self-check\n");
 		uart.puts("Paging bring-up:   hh_base=");
-		uart.write(Rocinante::to_string(kernel_higher_half_base));
+		uart.write_dec_u64(kernel_higher_half_base);
 		uart.putc('\n');
 		uart.puts("Paging bring-up:   physmap(root_pt)=");
-		uart.write(Rocinante::to_string(physmap_root_virtual));
+		uart.write_dec_u64(physmap_root_virtual);
 		uart.putc('\n');
 
 		const auto translated_hh = Rocinante::Memory::Paging::Translate(root, kernel_higher_half_base, g_paging_bringup_address_bits);
 		uart.puts("Paging bring-up:   Translate(hh_base)=");
 		if (translated_hh.has_value()) {
-			uart.write(Rocinante::to_string(translated_hh.value()));
+			uart.write_dec_u64(translated_hh.value());
 		} else {
 			uart.puts("<none>");
 		}
@@ -363,7 +363,7 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 		const auto translated_physmap = Rocinante::Memory::Paging::Translate(root, physmap_root_virtual, g_paging_bringup_address_bits);
 		uart.puts("Paging bring-up:   Translate(physmap(root_pt))=");
 		if (translated_physmap.has_value()) {
-			uart.write(Rocinante::to_string(translated_physmap.value()));
+			uart.write_dec_u64(translated_physmap.value());
 		} else {
 			uart.puts("<none>");
 		}
@@ -374,11 +374,8 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 
 	auto& cpucfg = Rocinante::GetCPUCFG();
 
-	Rocinante::String info;
-	info += "Hello, Rocinante!\n";
-	info += "Don the LoongArch64 armor and prepare to ride!\n\n";
-
-	uart.write(info);
+	uart.puts("Hello, Rocinante!\n");
+	uart.puts("Don the LoongArch64 armor and prepare to ride!\n\n");
 
 	uart.puts("CPU Architecture: ");
 	switch (cpucfg.Arch()) {
@@ -407,10 +404,10 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	uart.putc('\n');
 
 	uart.puts("Supported virtual address bits (VALEN): ");
-	uart.write(Rocinante::to_string(cpucfg.VirtualAddressBits()));
+	uart.write_dec_u64(cpucfg.VirtualAddressBits());
 	uart.putc('\n');
 	uart.puts("Supported physical address bits (PALEN): ");
-	uart.write(Rocinante::to_string(cpucfg.PhysicalAddressBits()));
+	uart.write_dec_u64(cpucfg.PhysicalAddressBits());
 	uart.putc('\n');
 
 	uart.putc('\n');
@@ -509,11 +506,11 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	Rocinante::Trap::Initialize();
 
 	uart.puts("Boot args (raw): a0=");
-	uart.write(Rocinante::to_string(is_uefi_compliant_bootenv));
+	uart.write_dec_u64(is_uefi_compliant_bootenv);
 	uart.puts(" a1=");
-	uart.write(Rocinante::to_string(kernel_cmdline_ptr));
+	uart.write_dec_u64(kernel_cmdline_ptr);
 	uart.puts(" a2=");
-	uart.write(Rocinante::to_string(boot_info_ptr_a2));
+	uart.write_dec_u64(boot_info_ptr_a2);
 	uart.putc('\n');
 
 	// Read the kernel command line from the pointer passed in a1 by the boot environment, if present.
@@ -544,9 +541,9 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 		const std::uintptr_t device_tree_physical_base = reinterpret_cast<std::uintptr_t>(maybe_device_tree_blob);
 		const std::size_t device_tree_size_bytes = Rocinante::Memory::BootMemoryMap::DeviceTreeTotalSizeBytesOrZero(maybe_device_tree_blob);
 		uart.puts("DTB detected: base=");
-		uart.write(Rocinante::to_string(device_tree_physical_base));
+		uart.write_dec_u64(device_tree_physical_base);
 		uart.puts(" size_bytes=");
-		uart.write(Rocinante::to_string(device_tree_size_bytes));
+		uart.write_dec_u64(device_tree_size_bytes);
 		uart.puts(" source=scan(low-mem)");
 		uart.putc('\n');
 
@@ -583,9 +580,9 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 				const std::uint32_t virtual_address_bits = Rocinante::GetCPUCFG().VirtualAddressBits();
 				const std::uint32_t physical_address_bits = Rocinante::GetCPUCFG().PhysicalAddressBits();
 				uart.puts("Paging bring-up: CPUCFG VALEN=");
-				uart.write(Rocinante::to_string(virtual_address_bits));
+				uart.write_dec_u64(virtual_address_bits);
 				uart.puts(" PALEN=");
-				uart.write(Rocinante::to_string(physical_address_bits));
+				uart.write_dec_u64(physical_address_bits);
 				uart.putc('\n');
 
 				constexpr auto BitIndexFromSingleBitMask = [](std::uint64_t mask) constexpr -> std::uint8_t {
@@ -695,7 +692,7 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								uart.puts("Paging bring-up: failed to map kernel higher-half alias\n");
 							} else {
 								uart.puts("Paging bring-up: kernel higher-half base=");
-								uart.write(Rocinante::to_string(kernel_higher_half_base));
+								uart.write_dec_u64(kernel_higher_half_base);
 								uart.putc('\n');
 							}
 
@@ -806,17 +803,17 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								if (stack_ok) {
 									higher_half_stack_top = stack_virtual_top;
 									uart.puts("Paging bring-up: higher-half stack mapped; guard_virt_base=");
-									uart.write(Rocinante::to_string(stack_guard_virtual_base));
+									uart.write_dec_u64(stack_guard_virtual_base);
 									uart.puts(" stack_virt_base=");
-									uart.write(Rocinante::to_string(stack_virtual_base));
+									uart.write_dec_u64(stack_virtual_base);
 									uart.puts(" stack_virt_top=");
-									uart.write(Rocinante::to_string(stack_virtual_top));
+									uart.write_dec_u64(stack_virtual_top);
 									uart.puts(" pages=");
-									uart.write(Rocinante::to_string(kHigherHalfStackMappedPageCount));
+									uart.write_dec_u64(kHigherHalfStackMappedPageCount);
 									uart.puts(" phys_pages=[");
 									for (std::size_t i = 0; i < kHigherHalfStackMappedPageCount; i++) {
 										if (i != 0) uart.puts(", ");
-										uart.write(Rocinante::to_string(stack_physical_pages[i]));
+										uart.write_dec_u64(stack_physical_pages[i]);
 									}
 									uart.puts("]\n");
 								}
@@ -879,11 +876,11 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 										g_paging_bringup_heap_virtual_base = heap_virtual_base;
 										g_paging_bringup_heap_size_bytes = kHeapSizeBytes;
 										uart.puts("Paging bring-up: higher-half heap mapped; virt_base=");
-										uart.write(Rocinante::to_string(heap_virtual_base));
+												uart.write_dec_u64(heap_virtual_base);
 										uart.puts(" size_bytes=");
-										uart.write(Rocinante::to_string(kHeapSizeBytes));
+												uart.write_dec_u64(kHeapSizeBytes);
 										uart.puts(" pages=");
-										uart.write(Rocinante::to_string(kHeapPageCount));
+												uart.write_dec_u64(kHeapPageCount);
 										uart.putc('\n');
 									}
 								}
@@ -918,21 +915,21 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								} else {
 									const std::uintptr_t physmap_physical_limit = physmap_physical_base + physmap_size_bytes;
 									uart.puts("Paging bring-up: physmap virt_base=");
-									uart.write(Rocinante::to_string(physmap_virtual_base));
+												uart.write_dec_u64(physmap_virtual_base);
 									uart.puts(" phys=[");
-									uart.write(Rocinante::to_string(physmap_physical_base));
+												uart.write_dec_u64(physmap_physical_base);
 									uart.puts(", ");
-									uart.write(Rocinante::to_string(physmap_physical_limit));
+												uart.write_dec_u64(physmap_physical_limit);
 									uart.puts(")\n");
 								}
 							}
 
 							uart.puts("Paging bring-up: root_pt_phys=");
-							uart.write(Rocinante::to_string(root.root_physical_address));
+							uart.write_dec_u64(root.root_physical_address);
 							uart.puts(" kernel_phys=[");
-							uart.write(Rocinante::to_string(kernel_physical_base));
+							uart.write_dec_u64(kernel_physical_base);
 							uart.puts(", ");
-							uart.write(Rocinante::to_string(kernel_physical_end));
+							uart.write_dec_u64(kernel_physical_end);
 							uart.puts(")\n");
 
 							// Bring-up self-check: confirm the software-built tables contain a
@@ -942,13 +939,13 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 							// "TLB refill walk mismatch".
 							const auto DumpPagingProbe = [&](std::uintptr_t probe_va) {
 								uart.puts("Paging bring-up: probe_va=");
-								uart.write(Rocinante::to_string(probe_va));
+								uart.write_dec_u64(probe_va);
 								uart.putc('\n');
 
 								const auto translated = Rocinante::Memory::Paging::Translate(root, probe_va, address_bits);
 								uart.puts("Paging bring-up: translate=");
 								if (translated.has_value()) {
-									uart.write(Rocinante::to_string(translated.value()));
+									uart.write_dec_u64(translated.value());
 								} else {
 									uart.puts("<none>");
 								}
@@ -970,13 +967,13 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								const std::size_t idx_pt = static_cast<std::size_t>((probe_va >> kShiftPt) & kIndexMask);
 
 								uart.puts("Paging bring-up: idx d3=");
-								uart.write(Rocinante::to_string(idx_dir3));
+								uart.write_dec_u64(idx_dir3);
 								uart.puts(" d2=");
-								uart.write(Rocinante::to_string(idx_dir2));
+								uart.write_dec_u64(idx_dir2);
 								uart.puts(" dl=");
-								uart.write(Rocinante::to_string(idx_dirl));
+								uart.write_dec_u64(idx_dirl);
 								uart.puts(" pt=");
-								uart.write(Rocinante::to_string(idx_pt));
+								uart.write_dec_u64(idx_pt);
 								uart.putc('\n');
 
 								auto* dir3 = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(root.root_physical_address);
@@ -991,25 +988,25 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								if (dir3) {
 									const std::uint64_t e3 = dir3->entries[idx_dir3];
 									uart.puts("Paging bring-up: e3=");
-									uart.write(Rocinante::to_string(e3));
+									uart.write_dec_u64(e3);
 									uart.putc('\n');
 									if (IsWalkable(e3)) {
 										auto* dir2 = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(EntryBase4K(e3));
 										const std::uint64_t e2 = dir2 ? dir2->entries[idx_dir2] : 0;
 										uart.puts("Paging bring-up: e2=");
-										uart.write(Rocinante::to_string(e2));
+										uart.write_dec_u64(e2);
 										uart.putc('\n');
 										if (dir2 && IsWalkable(e2)) {
 											auto* dirl = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(EntryBase4K(e2));
 											const std::uint64_t e1 = dirl ? dirl->entries[idx_dirl] : 0;
 											uart.puts("Paging bring-up: e1=");
-											uart.write(Rocinante::to_string(e1));
+											uart.write_dec_u64(e1);
 											uart.putc('\n');
 											if (dirl && IsWalkable(e1)) {
 												auto* pt = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(EntryBase4K(e1));
 												const std::uint64_t ep = pt ? pt->entries[idx_pt] : 0;
 												uart.puts("Paging bring-up: ep=");
-												uart.write(Rocinante::to_string(ep));
+												uart.write_dec_u64(ep);
 												uart.putc('\n');
 											}
 										}
@@ -1067,13 +1064,13 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 									const std::uintptr_t continuation_high = kernel_higher_half_base + continuation_offset;
 
 									uart.puts("Paging bring-up: switching SP from=");
-									uart.write(Rocinante::to_string(old_sp));
+									uart.write_dec_u64(old_sp);
 									uart.puts(" to=");
-									uart.write(Rocinante::to_string(new_sp));
+									uart.write_dec_u64(new_sp);
 									uart.putc('\n');
 
 									uart.puts("Paging bring-up: jumping to higher-half stack continuation target=");
-									uart.write(Rocinante::to_string(continuation_high));
+									uart.write_dec_u64(continuation_high);
 									uart.putc('\n');
 
 									asm volatile(
@@ -1103,11 +1100,8 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 
 	auto& cpucfg = Rocinante::GetCPUCFG();
 
-	Rocinante::String info;
-	info += "Hello, Rocinante!\n";
-	info += "Don the LoongArch64 armor and prepare to ride!\n\n";
-
-	uart.write(info);
+	uart.puts("Hello, Rocinante!\n");
+	uart.puts("Don the LoongArch64 armor and prepare to ride!\n\n");
 
 	// Print some information about the CPU configuration using the CPUCFG class
 	uart.puts("CPU Architecture: ");
@@ -1138,10 +1132,10 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 
 	// Let's read and print VALEN/PALEN as a sanity check that our CPUCFG class is working and we can read CPU-reported information correctly.
 	uart.puts("Supported virtual address bits (VALEN): ");
-	uart.write(Rocinante::to_string(cpucfg.VirtualAddressBits()));
+	uart.write_dec_u64(cpucfg.VirtualAddressBits());
 	uart.putc('\n');
 	uart.puts("Supported physical address bits (PALEN): ");
-	uart.write(Rocinante::to_string(cpucfg.PhysicalAddressBits()));
+	uart.write_dec_u64(cpucfg.PhysicalAddressBits());
 	uart.putc('\n');
 
 	uart.putc('\n');

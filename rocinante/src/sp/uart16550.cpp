@@ -67,10 +67,6 @@ char Rocinante::Uart16550::getc() const {
 	}
 }
 
-void Rocinante::Uart16550::write(Rocinante::String str) const {
-	puts(str.c_str());
-}
-
 void Rocinante::Uart16550::write_hex_u64(std::uint64_t value) const {
 	// Fixed-width hex formatting: 0x + 16 nybbles.
 	// This is intentionally allocation-free for trap safety.
