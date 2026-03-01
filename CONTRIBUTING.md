@@ -31,7 +31,7 @@ Further:
 - **Preserve invariants.**
   - A lot of this code is ABI-sensitive (assembly -- C++ struct layout, linker script expectations, boot protocol). Make those invariants visible and hard to accidentally break.
 - **Keep changes minimal and focused.**
-  - Don’t refactor unrelated code in the same change.
+  - Don't refactor unrelated code in the same change.
 - **Do not litter.**
   - While you're making a change, you may (for example) start going down one road and then change course.
   - When you change course, you shouldn't leave the old junk lying around. At that point, revert and then move forward with a clean slate.
@@ -85,14 +85,14 @@ When you are tempted to write a literal constant:
    - add `static_assert(sizeof(...))` / alignment checks on the C++ side where possible,
    - document that it is part of an ABI contract.
 3. **If it is a temporary bring-up constant** (timeouts, test delays):
-   - keep it obviously “bring-up only” and easy to adjust,
+   - keep it obviously "bring-up only" and easy to adjust,
    - annotate the assumption (clock rate, expected latency, etc.).
 
 ## C++ in a Freestanding Kernel
 
 - **Assume freestanding constraints.**
   No OS, no libc expectations. Avoid accidental dependencies.
-- **Exceptions/RTTI are off** (see build flags). Don’t introduce code that relies on them.
+- **Exceptions/RTTI are off** (see build flags). Don't introduce code that relies on them.
 - **Prefer simple, auditable constructs** over template metaprogramming.
 - **Be careful with static initialization.** If you add globals with constructors, be intentional about init order.
 
