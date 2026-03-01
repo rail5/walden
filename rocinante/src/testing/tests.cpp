@@ -15,6 +15,7 @@
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
 #include <src/memory/paging_hw.h>
+#include <src/memory/virtual_layout.h>
 
 extern "C" char _start;
 extern "C" char _end;
@@ -31,6 +32,34 @@ static inline std::uint64_t ReadTimeCounterTicks() {
 	asm volatile("rdtime.d %0, $zero" : "=r"(value));
 	return value;
 }
+
+// Shared virtual addresses for paging-hardware tests.
+//
+// Requirements:
+// - Canonical low-half virtual addresses in LA64.
+// - Page-aligned.
+static constexpr std::uintptr_t kPagingHwScratchVirtualPageBase = 0x0000000100000000ull; // 4 GiB
+
+static std::uintptr_t g_paging_hw_higher_half_stack_guard_virtual_base = 0;
+static std::uintptr_t g_paging_hw_higher_half_stack_top = 0;
+
+extern "C" void RocinanteTesting_SwitchStackAndStore(
+	std::uintptr_t new_stack_pointer,
+	std::uintptr_t store_address,
+	std::uint64_t store_value);
+
+asm(R"(
+	.text
+	.globl RocinanteTesting_SwitchStackAndStore
+	.type RocinanteTesting_SwitchStackAndStore, @function
+	.p2align 2
+RocinanteTesting_SwitchStackAndStore:
+	move   $t0, $sp
+	move   $sp, $a0
+	st.d   $a2, $a1, 0
+	move   $sp, $t0
+	jr     $ra
+)");
 
 struct FakeCPUCFGBackend final {
 	// LoongArch CPUCFG currently defines words 0x0..0x14.
@@ -388,7 +417,7 @@ static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
 	//
 	// WARNING:
 	// - This permanently enables paging for the remainder of the test run.
-	// - Therefore it must be the last test in the suite.
+	// - Any tests that run after this must tolerate paging being enabled.
 	//
 	// Minimal requirements before enabling paging:
 	// - identity map the current kernel image (PC + stack + globals)
@@ -492,7 +521,7 @@ static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
 
 	// Map a scratch page at a non-identity virtual address so we can force a
 	// translation that must be serviced via TLBR refill.
-	static constexpr std::uintptr_t kScratchVirtualPageBase = 0x0000000100000000ull; // 4 GiB
+	static constexpr std::uintptr_t kScratchVirtualPageBase = kPagingHwScratchVirtualPageBase;
 	const auto scratch_page = pmm.AllocatePage();
 	ROCINANTE_EXPECT_TRUE(ctx, scratch_page.has_value());
 	const std::uintptr_t scratch_physical_page_base = scratch_page.value();
@@ -514,6 +543,63 @@ static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
 		},
 		address_bits));
 
+	// Map a higher-half stack region with a guard page below it.
+	//
+	// Purpose:
+	// - Provide a mapped stack at a canonical higher-half virtual address.
+	// - Leave an unmapped guard page immediately below it.
+	// - Later tests can switch to this stack and prove that touching the guard
+	//   page faults with a paging exception (PIL/PIS) and a useful BADV.
+	{
+		static constexpr std::size_t kHigherHalfStackGuardPageCount = 1;
+		static constexpr std::size_t kHigherHalfStackMappedPageCount = 4;
+
+		const std::uintptr_t higher_half_base =
+			Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(address_bits.virtual_address_bits);
+		const std::uintptr_t stack_guard_virtual_base = higher_half_base;
+		const std::uintptr_t stack_virtual_base =
+			stack_guard_virtual_base +
+			(kHigherHalfStackGuardPageCount * Rocinante::Memory::Paging::kPageSizeBytes);
+		const std::uintptr_t stack_virtual_top =
+			stack_virtual_base +
+			(kHigherHalfStackMappedPageCount * Rocinante::Memory::Paging::kPageSizeBytes);
+
+		const PagePermissions stack_permissions{
+			.access = AccessPermissions::ReadWrite,
+			.execute = ExecutePermissions::NoExecute,
+			.cache = CacheMode::CoherentCached,
+			.global = true,
+		};
+
+		bool stack_ok = true;
+		for (std::size_t i = 0; i < kHigherHalfStackMappedPageCount; i++) {
+			const auto page_or = pmm.AllocatePage();
+			ROCINANTE_EXPECT_TRUE(ctx, page_or.has_value());
+			if (!page_or.has_value()) {
+				stack_ok = false;
+				break;
+			}
+			const std::uintptr_t page_virtual = stack_virtual_base + (i * Rocinante::Memory::Paging::kPageSizeBytes);
+			const bool mapped = MapPage4KiB(
+				&pmm,
+				root.value(),
+				page_virtual,
+				page_or.value(),
+				stack_permissions,
+				address_bits);
+			ROCINANTE_EXPECT_TRUE(ctx, mapped);
+			if (!mapped) {
+				stack_ok = false;
+				break;
+			}
+		}
+
+		if (stack_ok) {
+			g_paging_hw_higher_half_stack_guard_virtual_base = stack_guard_virtual_base;
+			g_paging_hw_higher_half_stack_top = stack_virtual_top;
+		}
+	}
+
 	const auto config_or = Rocinante::Memory::PagingHw::Make4KiBPageWalkerConfig(address_bits);
 	ROCINANTE_EXPECT_TRUE(ctx, config_or.has_value());
 	Rocinante::Memory::PagingHw::ConfigurePageTableWalker(root.value(), config_or.value());
@@ -530,6 +616,97 @@ static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
 	ROCINANTE_EXPECT_EQ_U64(ctx, observed2, 0xaabbccddeeff0011ull);
 }
 
+static void Test_PagingHw_HigherHalfStack_GuardPageFaults(TestContext* ctx) {
+	// This test runs after paging has been enabled.
+	// It switches SP to a higher-half mapped stack and then deliberately stores
+	// into the unmapped guard page below it.
+
+	// LoongArch EXCCODE values (Table 21):
+	// - 0x2 => PIS: page invalid for store
+	static constexpr std::uint64_t kExceptionCodePis = 0x2;
+
+	// Sanity check: paging must be enabled (CRMD.PG=1, CRMD.DA=0).
+	static constexpr std::uint32_t kCsrCrmd = 0x0;
+	static constexpr std::uint64_t kCrmdPagingEnable = (1ull << 4);
+	static constexpr std::uint64_t kCrmdDirectAddressingEnable = (1ull << 3);
+	std::uint64_t crmd = 0;
+	asm volatile("csrrd %0, %1" : "=r"(crmd) : "i"(kCsrCrmd));
+	if ((crmd & kCrmdPagingEnable) == 0 || (crmd & kCrmdDirectAddressingEnable) != 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_higher_half_stack_top != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_higher_half_stack_guard_virtual_base != 0);
+	if (g_paging_hw_higher_half_stack_top == 0 || g_paging_hw_higher_half_stack_guard_virtual_base == 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	// Store to the first byte of the guard page: this must fault.
+	const std::uintptr_t guard_page_probe_address = g_paging_hw_higher_half_stack_guard_virtual_base;
+	ArmExpectedTrap(kExceptionCodePis);
+	RocinanteTesting_SwitchStackAndStore(
+		g_paging_hw_higher_half_stack_top,
+		guard_page_probe_address,
+		0x0123456789abcdefull);
+	ROCINANTE_EXPECT_TRUE(ctx, ExpectedTrapObserved());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapExceptionCode(), kExceptionCodePis);
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapBadVaddr(), guard_page_probe_address);
+}
+
+static void Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV(TestContext* ctx) {
+	// This test runs after paging has been enabled.
+	// It asserts that an access to an unmapped page faults and reports the fault
+	// virtual address in CSR.BADV (exposed via the trap frame).
+
+	// LoongArch EXCCODE values (Table 21):
+	// - 0x1 => PIL: page invalid for load
+	// - 0x2 => PIS: page invalid for store
+	static constexpr std::uint64_t kExceptionCodePil = 0x1;
+	static constexpr std::uint64_t kExceptionCodePis = 0x2;
+
+	// Sanity check: paging must be enabled (CRMD.PG=1, CRMD.DA=0).
+	// In direct-address mode, this virtual address would be treated as a physical
+	// address; the resulting fault mode is platform-dependent and not a paging
+	// exception.
+	static constexpr std::uint32_t kCsrCrmd = 0x0;
+	static constexpr std::uint64_t kCrmdPagingEnable = (1ull << 4);
+	static constexpr std::uint64_t kCrmdDirectAddressingEnable = (1ull << 3);
+	std::uint64_t crmd = 0;
+	asm volatile("csrrd %0, %1" : "=r"(crmd) : "i"(kCsrCrmd));
+	if ((crmd & kCrmdPagingEnable) == 0 || (crmd & kCrmdDirectAddressingEnable) != 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	// Choose a canonical low-half virtual address that is provably unmapped.
+	//
+	// Suite contract:
+	// - The paging smoke test maps exactly one scratch page at
+	//   kPagingHwScratchVirtualPageBase.
+	// - It does not map the immediately-adjacent page.
+	static constexpr std::uintptr_t kFaultVirtualAddress =
+		kPagingHwScratchVirtualPageBase + Rocinante::Memory::Paging::kPageSizeBytes;
+	static_assert((kFaultVirtualAddress % Rocinante::Memory::Paging::kPageSizeBytes) == 0);
+
+	// Unmapped load => PIL.
+	ArmExpectedTrap(kExceptionCodePil);
+	std::uint64_t tmp = 0;
+	asm volatile("ld.d %0, %1, 0" : "=r"(tmp) : "r"(kFaultVirtualAddress) : "memory");
+	ROCINANTE_EXPECT_TRUE(ctx, ExpectedTrapObserved());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapExceptionCode(), kExceptionCodePil);
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapBadVaddr(), kFaultVirtualAddress);
+
+	// Unmapped store => PIS.
+	ArmExpectedTrap(kExceptionCodePis);
+	const std::uint64_t store_value = 0xdeadbeefcafebabeull;
+	asm volatile("st.d %0, %1, 0" :: "r"(store_value), "r"(kFaultVirtualAddress) : "memory");
+	ROCINANTE_EXPECT_TRUE(ctx, ExpectedTrapObserved());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapExceptionCode(), kExceptionCodePis);
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapBadVaddr(), kFaultVirtualAddress);
+}
+
 } // namespace
 
 extern const TestCase g_test_cases[] = {
@@ -542,6 +719,8 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.Paging.RespectsVALENAndPALEN", &Test_Paging_RespectsVALENAndPALEN},
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &Test_PMM_RespectsReservedKernelAndDTB},
 	{"Memory.PagingHw.EnablePaging.TlbRefillSmoke", &Test_PagingHw_EnablePaging_TlbRefillSmoke},
+	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV},
+	{"Memory.PagingHw.HigherHalfStack.GuardPageFaults", &Test_PagingHw_HigherHalfStack_GuardPageFaults},
 };
 
 extern const std::size_t g_test_case_count = sizeof(g_test_cases) / sizeof(g_test_cases[0]);

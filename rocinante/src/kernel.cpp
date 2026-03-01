@@ -5,6 +5,7 @@
 
 #include "kernel.h"
 #include <src/memory/memory.h>
+#include <src/memory/heap.h>
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
 #include <src/memory/paging_hw.h>
@@ -23,6 +24,14 @@ constexpr std::uintptr_t UART_BASE = 0x1fe001e0UL; // QEMU LoongArch virt: VIRT_
 constexpr std::uintptr_t kSysconBase = 0x100e001cUL; // QEMU LoongArch virt: syscon-poweroff MMIO base
 
 static constinit Rocinante::Uart16550 uart(UART_BASE);
+
+// Paging bring-up handoff state.
+//
+// These values are populated while building the bootstrap page tables (paging
+// still off), then consumed after paging is enabled and we have switched to a
+// higher-half stack.
+static std::uintptr_t g_paging_bringup_heap_virtual_base = 0;
+static std::size_t g_paging_bringup_heap_size_bytes = 0;
 
 namespace Csr {
 	// LoongArch privileged architecture CSR numbering.
@@ -230,6 +239,37 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	uart.puts("Paging bring-up: higher-half stack continuation sp=");
 	uart.write(Rocinante::to_string(current_sp));
 	uart.putc('\n');
+
+	// Heap handoff: re-initialize the allocator to use the VM-backed heap region
+	// we mapped during paging bring-up.
+	if (g_paging_bringup_heap_virtual_base != 0 && g_paging_bringup_heap_size_bytes != 0) {
+		uart.puts("Paging bring-up: initializing heap after paging; heap_base=");
+		uart.write(Rocinante::to_string(g_paging_bringup_heap_virtual_base));
+		uart.puts(" heap_size_bytes=");
+		uart.write(Rocinante::to_string(g_paging_bringup_heap_size_bytes));
+		uart.putc('\n');
+
+		Rocinante::Memory::InitHeapAfterPaging(
+			reinterpret_cast<void*>(g_paging_bringup_heap_virtual_base),
+			g_paging_bringup_heap_size_bytes
+		);
+
+		uart.puts("Paging bring-up: heap stats after init: total_bytes=");
+		uart.write(Rocinante::to_string(Rocinante::Heap::TotalBytes()));
+		uart.puts(" free_bytes=");
+		uart.write(Rocinante::to_string(Rocinante::Heap::FreeBytes()));
+		uart.putc('\n');
+
+		void* p = Rocinante::Heap::Alloc(64, 16);
+		uart.puts("Paging bring-up: heap alloc(64,16) returned ");
+		uart.write_hex_u64(reinterpret_cast<std::uint64_t>(p));
+		uart.putc('\n');
+		if (p) {
+			Rocinante::Heap::Free(p);
+		}
+	} else {
+		uart.puts("Paging bring-up: heap after paging not configured; skipping heap handoff\n");
+	}
 
 	auto& cpucfg = Rocinante::GetCPUCFG();
 
@@ -646,6 +686,73 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 										uart.write(Rocinante::to_string(stack_physical_pages[i]));
 									}
 									uart.puts("]\n");
+								}
+							}
+
+							// Allocate and map a small VM-backed heap region.
+							//
+							// Plan alignment:
+							// - This is the handoff from the bootstrap .bss heap to a region backed
+							//   by real PMM frames and page-table mappings.
+							// - We keep the bootstrap heap alive; this is bring-up, not a teardown.
+							//
+							// Placement policy (bring-up only):
+							// Place heap pages immediately above the higher-half stack region.
+							// This avoids overlapping the stack guard+stack pages we just mapped.
+							{
+								static constexpr std::size_t kHeapPageCount = 16;
+								static constexpr std::size_t kHeapSizeBytes = kHeapPageCount * Rocinante::Memory::Paging::kPageSizeBytes;
+
+								if (higher_half_stack_top == 0) {
+									uart.puts("Paging bring-up: higher-half stack not mapped; skipping heap mapping\n");
+								} else {
+									const std::uintptr_t heap_virtual_base =
+										(higher_half_stack_top + (Rocinante::Memory::Paging::kPageSizeBytes - 1)) &
+										~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+
+									Rocinante::Memory::Paging::PagePermissions heap_permissions{
+										.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
+										.execute = Rocinante::Memory::Paging::ExecutePermissions::NoExecute,
+										.cache = Rocinante::Memory::Paging::CacheMode::CoherentCached,
+										.global = true,
+									};
+
+									bool heap_ok = true;
+									for (std::size_t i = 0; i < kHeapPageCount; i++) {
+										const auto page_or = pmm.AllocatePage();
+										if (!page_or.has_value()) {
+											uart.puts("Paging bring-up: failed to allocate heap page\n");
+											heap_ok = false;
+											break;
+										}
+										const std::uintptr_t heap_page_physical = page_or.value();
+										const std::uintptr_t heap_page_virtual = heap_virtual_base + (i * Rocinante::Memory::Paging::kPageSizeBytes);
+										if (!Rocinante::Memory::Paging::MapPage4KiB(
+											&pmm,
+											root,
+											heap_page_virtual,
+											heap_page_physical,
+											heap_permissions,
+											address_bits
+										)) {
+											uart.puts("Paging bring-up: failed to map heap page\n");
+											uart.puts("Paging bring-up: NOTE: heap mapping failure may leave partial mappings\n");
+											heap_ok = false;
+											break;
+										}
+									}
+
+									if (heap_ok) {
+										g_paging_bringup_heap_virtual_base = heap_virtual_base;
+										g_paging_bringup_heap_size_bytes = kHeapSizeBytes;
+										uart.puts("Paging bring-up: higher-half heap mapped; virt_base=");
+										uart.write(Rocinante::to_string(heap_virtual_base));
+										uart.puts(" size_bytes=");
+										uart.write(Rocinante::to_string(kHeapSizeBytes));
+										uart.puts(" pages=");
+										uart.write(Rocinante::to_string(kHeapPageCount));
+										uart.putc('\n');
+									}
 								}
 							}
 
