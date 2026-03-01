@@ -119,6 +119,19 @@ void Initialize() {
 	WriteMachineErrorEntryAddress(entry);
 }
 
+void SetGeneralAndMachineErrorExceptionEntryPageBase(std::uint64_t entry_page_base) {
+	// Spec behavior (LoongArch-Vol1-EN.html):
+	// - CSR.EENTRY[11:0] is read-only constant 0 (writes ignored)
+	// - CSR.MERRENTRY[11:0] is read-only constant 0 (writes ignored)
+	//
+	// Masking here ensures we write the effective page base the CPU will use.
+	constexpr std::uint64_t k4KiBPageOffsetMask = 0xfffull;
+	constexpr std::uint64_t k4KiBPageBaseMask = ~k4KiBPageOffsetMask;
+	const std::uint64_t entry = entry_page_base & k4KiBPageBaseMask;
+	WriteExceptionEntryAddress(entry);
+	WriteMachineErrorEntryAddress(entry);
+}
+
 void EnableInterrupts() {
 	auto current_mode_information = ReadCurrentModeInformation();
 	current_mode_information |= CurrentModeInformation::InterruptEnable;

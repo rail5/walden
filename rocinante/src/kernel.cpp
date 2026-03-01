@@ -20,6 +20,9 @@
 
 namespace {
 
+extern "C" char _start;
+extern "C" void __exception_entry();
+
 constexpr std::uintptr_t UART_BASE = 0x1fe001e0UL; // QEMU LoongArch virt: VIRT_UART_BASE address
 constexpr std::uintptr_t kSysconBase = 0x100e001cUL; // QEMU LoongArch virt: syscon-poweroff MMIO base
 
@@ -32,6 +35,14 @@ static constinit Rocinante::Uart16550 uart(UART_BASE);
 // higher-half stack.
 static std::uintptr_t g_paging_bringup_heap_virtual_base = 0;
 static std::size_t g_paging_bringup_heap_size_bytes = 0;
+
+// Post-paging self-check state.
+//
+// These values are recorded while paging is still disabled and the bootstrap
+// tables are being constructed. After paging is enabled, the higher-half
+// continuation uses them to run a software-walker self-check in mapped mode.
+static std::uintptr_t g_paging_bringup_root_pt_physical_address = 0;
+static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits{0, 0};
 
 namespace Csr {
 	// LoongArch privileged architecture CSR numbering.
@@ -219,7 +230,7 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	halt();
 }
 
-[[noreturn]] [[gnu::noinline]] static void PagingBringup_HigherHalfStackContinuation() {
+[[noreturn]] [[maybe_unused]] [[gnu::noinline]] static void PagingBringup_HigherHalfStackContinuation() {
 	// This function is entered via an assembly jump after paging is enabled.
 	// It is the first C++ code we intentionally run with a higher-half stack.
 
@@ -239,6 +250,40 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	uart.puts("Paging bring-up: higher-half stack continuation sp=");
 	uart.write(Rocinante::to_string(current_sp));
 	uart.putc('\n');
+
+	// Higher-half exception entry relocation.
+	//
+	// Goal:
+	// Prove that general exceptions can enter/return using the higher-half kernel
+	// alias, so later we can safely tear down the low identity mapping.
+	//
+	// Spec anchors (LoongArch-Vol1-EN.html):
+	// - Section 6.3.1 (Exception Entry): general exceptions use CSR.EENTRY.
+	// - Section 6.3.4 (Hardware Exception Handling of TLB Refill Exception): TLB
+	//   refill uses CSR.TLBRENTRY and forces direct address translation mode.
+	//
+	// Policy:
+	// - Relocate CSR.EENTRY/CSR.MERRENTRY to the higher-half alias.
+	// - Do not change CSR.TLBRENTRY here.
+	if (g_paging_bringup_address_bits.virtual_address_bits != 0) {
+		const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+		const std::uintptr_t kernel_higher_half_base =
+			Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(g_paging_bringup_address_bits.virtual_address_bits);
+		const std::uintptr_t exception_entry_low = reinterpret_cast<std::uintptr_t>(&__exception_entry);
+		const std::uintptr_t exception_entry_high = kernel_higher_half_base + (exception_entry_low - kernel_physical_base);
+
+		uart.puts("Paging bring-up: relocating EENTRY/MERRENTRY to entry=");
+		uart.write(Rocinante::to_string(exception_entry_high));
+		uart.putc('\n');
+
+		Rocinante::Trap::SetGeneralAndMachineErrorExceptionEntryPageBase(exception_entry_high);
+
+		uart.puts("Paging bring-up: triggering BREAK self-check\n");
+		asm volatile("break 0" ::: "memory");
+		uart.puts("Paging bring-up: BREAK returned\n");
+	} else {
+		uart.puts("Paging bring-up: skipping EENTRY relocation (no address_bits)\n");
+	}
 
 	// Heap handoff: re-initialize the allocator to use the VM-backed heap region
 	// we mapped during paging bring-up.
@@ -269,6 +314,62 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 		}
 	} else {
 		uart.puts("Paging bring-up: heap after paging not configured; skipping heap handoff\n");
+	}
+
+	// Post-paging software-walker self-check.
+	//
+	// Purpose:
+	// Prove that our software page-table walker can read page-table pages while
+	// paging is enabled.
+	//
+	// Why this matters:
+	// In mapped address translation mode, the paging module dereferences page-table
+	// pages through the physmap (not by treating physical addresses as pointers).
+	// If the physmap does not cover the page-table pages, walking will fault.
+	//
+	// Spec anchor:
+	// - LoongArch-Vol1-EN.html, Section 5.2: CRMD.DA/CRMD.PG select direct vs mapped
+	//   address translation mode.
+	if (g_paging_bringup_root_pt_physical_address != 0 && g_paging_bringup_address_bits.virtual_address_bits != 0) {
+		const Rocinante::Memory::Paging::PageTableRoot root{
+			.root_physical_address = g_paging_bringup_root_pt_physical_address,
+		};
+
+		const std::uintptr_t kernel_higher_half_base =
+			Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(g_paging_bringup_address_bits.virtual_address_bits);
+		const std::uintptr_t physmap_root_virtual =
+			Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(
+				g_paging_bringup_root_pt_physical_address,
+				g_paging_bringup_address_bits.virtual_address_bits
+			);
+
+		uart.puts("Paging bring-up: post-paging Translate self-check\n");
+		uart.puts("Paging bring-up:   hh_base=");
+		uart.write(Rocinante::to_string(kernel_higher_half_base));
+		uart.putc('\n');
+		uart.puts("Paging bring-up:   physmap(root_pt)=");
+		uart.write(Rocinante::to_string(physmap_root_virtual));
+		uart.putc('\n');
+
+		const auto translated_hh = Rocinante::Memory::Paging::Translate(root, kernel_higher_half_base, g_paging_bringup_address_bits);
+		uart.puts("Paging bring-up:   Translate(hh_base)=");
+		if (translated_hh.has_value()) {
+			uart.write(Rocinante::to_string(translated_hh.value()));
+		} else {
+			uart.puts("<none>");
+		}
+		uart.putc('\n');
+
+		const auto translated_physmap = Rocinante::Memory::Paging::Translate(root, physmap_root_virtual, g_paging_bringup_address_bits);
+		uart.puts("Paging bring-up:   Translate(physmap(root_pt))=");
+		if (translated_physmap.has_value()) {
+			uart.write(Rocinante::to_string(translated_physmap.value()));
+		} else {
+			uart.puts("<none>");
+		}
+		uart.putc('\n');
+	} else {
+		uart.puts("Paging bring-up: post-paging Translate self-check skipped (no root/address_bits)\n");
 	}
 
 	auto& cpucfg = Rocinante::GetCPUCFG();
@@ -508,11 +609,43 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 						.physical_address_bits = static_cast<std::uint8_t>(physical_address_bits),
 					};
 
+					// Bootstrap physmap policy (bring-up): map a linear window of physical RAM
+					// into the higher half.
+					//
+					// Correctness invariant:
+					// Once we enable paging (CRMD.DA=0, CRMD.PG=1), page-table pages can no
+					// longer be safely accessed by treating their physical address as a
+					// pointer. All physical memory the kernel intends to touch must be mapped.
+					//
+					// Spec anchor:
+					// - LoongArch-Vol1-EN.html, Section 5.2 (Virtual Address Space and Address
+					//   Translation Mode): CRMD.DA/CRMD.PG select direct vs mapped translation.
+					//
+					const std::uintptr_t physmap_physical_base = pmm.TrackedPhysicalBase();
+					const std::uintptr_t tracked_physical_limit = pmm.TrackedPhysicalLimit();
+					std::size_t physmap_size_bytes = 0;
+					if (tracked_physical_limit > physmap_physical_base) {
+						const std::size_t tracked_size_bytes =
+							static_cast<std::size_t>(tracked_physical_limit - physmap_physical_base);
+						// Bring-up policy:
+						// Expand the physmap window to cover the entire PMM-tracked RAM span so
+						// that any PMM allocation can be accessed via the linear physmap once
+						// paging is enabled.
+						physmap_size_bytes = tracked_size_bytes;
+						physmap_size_bytes &= ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+					}
+
+					if (physmap_size_bytes == 0) {
+						uart.puts("Paging bring-up: no tracked RAM for physmap; skipping physmap build\n");
+					}
+
 					const auto root_or = Rocinante::Memory::Paging::AllocateRootPageTable(&pmm);
 					if (!root_or.has_value()) {
 						uart.puts("Paging bring-up: failed to allocate root page table\n");
 					} else {
 						const auto root = root_or.value();
+						g_paging_bringup_root_pt_physical_address = root.root_physical_address;
+						g_paging_bringup_address_bits = address_bits;
 
 						// Identity-map the kernel image so enabling paging does not immediately
 						// fault while executing in the low physical mapping.
@@ -756,30 +889,9 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								}
 							}
 
-							// Minimal physmap: map a small linear window of physical RAM into the
-							// higher half so page-table pages and PMM frames can be accessed by VA
-							// once paging is enabled.
-							//
-							// Bring-up policy:
-							// - Keep this deliberately small at first.
-							// - Start from the PMM tracked base (not necessarily 0).
-							static constexpr std::size_t kBootstrapPhysMapSizeBytes = 16u * 1024u * 1024u; // 16 MiB
-
-							const std::uintptr_t physmap_physical_base = pmm.TrackedPhysicalBase();
-							const std::uintptr_t physmap_physical_limit = pmm.TrackedPhysicalLimit();
-							std::size_t physmap_size_bytes = 0;
-							if (physmap_physical_limit > physmap_physical_base) {
-								const std::size_t tracked_size_bytes =
-									static_cast<std::size_t>(physmap_physical_limit - physmap_physical_base);
-								physmap_size_bytes = (tracked_size_bytes < kBootstrapPhysMapSizeBytes)
-									? tracked_size_bytes
-									: kBootstrapPhysMapSizeBytes;
-								physmap_size_bytes &= ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
-							}
-
-							if (physmap_size_bytes == 0) {
-								uart.puts("Paging bring-up: no tracked RAM for physmap; skipping physmap build\n");
-							} else {
+							// Bootstrap physmap: map the previously computed physmap window into the
+							// higher half.
+							if (physmap_size_bytes != 0) {
 								const std::uintptr_t physmap_virtual_base =
 									Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(
 										physmap_physical_base,
@@ -804,12 +916,13 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								)) {
 									uart.puts("Paging bring-up: failed to map bootstrap physmap window\n");
 								} else {
+									const std::uintptr_t physmap_physical_limit = physmap_physical_base + physmap_size_bytes;
 									uart.puts("Paging bring-up: physmap virt_base=");
 									uart.write(Rocinante::to_string(physmap_virtual_base));
 									uart.puts(" phys=[");
 									uart.write(Rocinante::to_string(physmap_physical_base));
 									uart.puts(", ");
-									uart.write(Rocinante::to_string(physmap_physical_base + physmap_size_bytes));
+									uart.write(Rocinante::to_string(physmap_physical_limit));
 									uart.puts(")\n");
 								}
 							}

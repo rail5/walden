@@ -61,6 +61,25 @@ namespace Trap {
  */
 void Initialize();
 
+/**
+ * @brief Reprograms the general-exception entry base (CSR.EENTRY) and machine-error
+ * entry base (CSR.MERRENTRY).
+ *
+ * This exists to support higher-half bring-up: once the kernel jumps to its
+ * higher-half alias, we can also move general exception entry to the same alias.
+ *
+ * Spec anchor (LoongArch-Vol1-EN.html):
+ * - Section 6.3.1 (Exception Entry): general exceptions use CSR.EENTRY; machine
+ *   error uses CSR.MERRENTRY; TLB refill uses CSR.TLBRENTRY.
+ *
+ * Constraints:
+ * - The low 12 bits of CSR.EENTRY/CSR.MERRENTRY are ignored by hardware.
+ *   (Entries are effectively 4 KiB aligned.)
+ *
+ * This function intentionally does not update CSR.TLBRENTRY.
+ */
+void SetGeneralAndMachineErrorExceptionEntryPageBase(std::uint64_t entry_page_base);
+
 // Global interrupt enable in CSR.CRMD.
 void EnableInterrupts();
 void DisableInterrupts();
