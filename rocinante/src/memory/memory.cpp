@@ -44,16 +44,7 @@ static std::uint64_t MaxForWidth(std::uint32_t width_bits) {
 void InitEarly() {
 	if (g_inited) return;
 
-	// 1) Ensure we have *some* dynamic allocation.
-	//
-	// This is a bootstrap heap backed by a static buffer in .bss. It's suitable
-	// for early initialization when we do not yet have:
-	// - a physical memory allocator (PMM)
-	// - a page allocator
-	// - paging enabled / a VMM
-	Rocinante::Heap::InitDefault();
-
-	// 2) Snapshot CPU-reported address width limits.
+	// 1) Snapshot CPU-reported address width limits.
 	//
 	// This informs later memory-layout choices:
 	// - which virtual addresses are valid to use at all (VALEN)
@@ -66,7 +57,7 @@ void InitEarly() {
 	g_limits.VirtualMax = MaxForWidth(g_limits.VALEN);
 	g_limits.PhysicalMax = MaxForWidth(g_limits.PALEN);
 
-	// 3) Recommend a future heap placement.
+	// 2) Recommend a future heap placement.
 	//
 	// We can *recommend* "heap starts at end of kernel" now, but we cannot
 	// actually use it until there are page tables mapping that region.
@@ -89,7 +80,7 @@ std::uintptr_t RecommendedHeapVirtualBase() {
 void InitHeapAfterPaging(void* heap_base, std::size_t heap_size_bytes) {
 	// This is the hand-off point: once our paging/VMM maps a dedicated heap
 	// region, re-point the allocator at it.
-	Rocinante::Heap::Init(heap_base, heap_size_bytes);
+	Rocinante::Memory::Heap::Init(heap_base, heap_size_bytes);
 }
 
 } // namespace Rocinante::Memory

@@ -5,7 +5,7 @@
 
 #include "heap.h"
 
-namespace Rocinante::Heap {
+namespace Rocinante::Memory::Heap {
 
 // -----------------------------
 // Block format and invariants
@@ -62,10 +62,6 @@ static std::uint8_t* g_heap_begin = nullptr;
 static std::uint8_t* g_heap_end = nullptr;
 static FreeNode* g_free_list_head = nullptr;
 static bool g_initialized = false;
-
-// Default heap storage (early bring-up convenience)
-// 1 MiB is arbitrary; increase when we start using more dynamic allocations.
-alignas(kHeapAlign) static std::uint8_t g_default_heap[1024 * 1024];
 
 static constexpr std::uintptr_t AlignUp(std::uintptr_t value, std::size_t alignment) {
 	return (value + (alignment - 1)) & ~(static_cast<std::uintptr_t>(alignment) - 1);
@@ -135,20 +131,10 @@ static void FreeListInsertFront(FreeNode* node) {
 	g_free_list_head = node;
 }
 
-static void EnsureInitialized() {
-	if (!g_initialized) {
-		InitDefault();
-	}
-}
-
 } // namespace
 
 bool IsInitialized() {
 	return g_initialized;
-}
-
-void InitDefault() {
-	Init(g_default_heap, sizeof(g_default_heap));
 }
 
 void Init(void* heap_start, std::size_t heap_size_bytes) {
@@ -193,7 +179,6 @@ void Init(void* heap_start, std::size_t heap_size_bytes) {
 }
 
 void* Alloc(std::size_t size, std::size_t alignment) {
-	EnsureInitialized();
 	if (!g_initialized) return nullptr;
 
 	// Normalize alignment. We guarantee at least 16-byte alignment.
@@ -267,7 +252,6 @@ void* Alloc(std::size_t size, std::size_t alignment) {
 }
 
 void Free(void* ptr) {
-	EnsureInitialized();
 	if (!g_initialized || !ptr) return;
 
 	auto* header = reinterpret_cast<BlockHeader*>(reinterpret_cast<std::uint8_t*>(ptr) - HeaderSize);
@@ -299,13 +283,11 @@ void Free(void* ptr) {
 }
 
 std::size_t TotalBytes() {
-	EnsureInitialized();
 	if (!g_initialized) return 0;
 	return static_cast<std::size_t>(g_heap_end - g_heap_begin);
 }
 
 std::size_t FreeBytes() {
-	EnsureInitialized();
 	if (!g_initialized) return 0;
 
 	std::size_t total = 0;
@@ -315,4 +297,4 @@ std::size_t FreeBytes() {
 	return total;
 }
 
-} // namespace Rocinante::Heap
+} // namespace Rocinante::Memory::Heap

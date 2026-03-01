@@ -232,76 +232,76 @@ namespace {
 
 // ---- operator new (single object) ----
 void* operator new(std::size_t size) {
-	if (void* p = Rocinante::Heap::Alloc(size)) return p;
+	if (void* p = Rocinante::Memory::Heap::Alloc(size)) return p;
 	OutOfMemorySpin();
 }
 
 void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
-	return Rocinante::Heap::Alloc(size);
+	return Rocinante::Memory::Heap::Alloc(size);
 }
 
 // ---- operator new (array) ----
 void* operator new[](std::size_t size) {
-	if (void* p = Rocinante::Heap::Alloc(size)) return p;
+	if (void* p = Rocinante::Memory::Heap::Alloc(size)) return p;
 	OutOfMemorySpin();
 }
 
 void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
-	return Rocinante::Heap::Alloc(size);
+	return Rocinante::Memory::Heap::Alloc(size);
 }
 
 // ---- aligned operator new (over-aligned types) ----
 void* operator new(std::size_t size, std::align_val_t align) {
 	const std::size_t alignment = static_cast<std::size_t>(align);
-	if (void* p = Rocinante::Heap::Alloc(size, alignment)) return p;
+	if (void* p = Rocinante::Memory::Heap::Alloc(size, alignment)) return p;
 	OutOfMemorySpin();
 }
 
 void* operator new(std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
-	return Rocinante::Heap::Alloc(size, static_cast<std::size_t>(align));
+	return Rocinante::Memory::Heap::Alloc(size, static_cast<std::size_t>(align));
 }
 
 void* operator new[](std::size_t size, std::align_val_t align) {
 	const std::size_t alignment = static_cast<std::size_t>(align);
-	if (void* p = Rocinante::Heap::Alloc(size, alignment)) return p;
+	if (void* p = Rocinante::Memory::Heap::Alloc(size, alignment)) return p;
 	OutOfMemorySpin();
 }
 
 void* operator new[](std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
-	return Rocinante::Heap::Alloc(size, static_cast<std::size_t>(align));
+	return Rocinante::Memory::Heap::Alloc(size, static_cast<std::size_t>(align));
 }
 
 // ---- operator delete ----
 void operator delete(void* ptr) noexcept {
-	Rocinante::Heap::Free(ptr);
+	Rocinante::Memory::Heap::Free(ptr);
 }
 
 void operator delete[](void* ptr) noexcept {
-	Rocinante::Heap::Free(ptr);
+	Rocinante::Memory::Heap::Free(ptr);
 }
 
 // Sized delete (the compiler may emit calls to these in C++14+).
 void operator delete(void* ptr, std::size_t) noexcept {
-	Rocinante::Heap::Free(ptr);
+	Rocinante::Memory::Heap::Free(ptr);
 }
 
 void operator delete[](void* ptr, std::size_t) noexcept {
-	Rocinante::Heap::Free(ptr);
+	Rocinante::Memory::Heap::Free(ptr);
 }
 
 // Aligned delete.
 void operator delete(void* ptr, std::align_val_t) noexcept {
-	Rocinante::Heap::Free(ptr);
+	Rocinante::Memory::Heap::Free(ptr);
 }
 
 void operator delete[](void* ptr, std::align_val_t) noexcept {
-	Rocinante::Heap::Free(ptr);
+	Rocinante::Memory::Heap::Free(ptr);
 }
 
 void operator delete(void* ptr, std::size_t, std::align_val_t) noexcept {
-	Rocinante::Heap::Free(ptr);
+	Rocinante::Memory::Heap::Free(ptr);
 }
 
 void operator delete[](void* ptr, std::size_t, std::align_val_t) noexcept {
-	Rocinante::Heap::Free(ptr);
+	Rocinante::Memory::Heap::Free(ptr);
 }

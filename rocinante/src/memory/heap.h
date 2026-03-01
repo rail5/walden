@@ -8,7 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace Rocinante::Heap {
+namespace Rocinante::Memory::Heap {
 
 // This module provides a simple kernel heap (dynamic allocator)
 //
@@ -25,18 +25,13 @@ namespace Rocinante::Heap {
 // - Per-CPU caches, slabs, etc.
 // - Returning memory to the host/firmware.
 
-// Initializes the heap over the given memory region.
+// Initializes the heap over the given (already-mapped) memory region.
 //
 // The region must be writable RAM and remain valid for the lifetime of the
 // kernel.
 void Init(void* heap_start, std::size_t heap_size_bytes);
 
-// Initializes a default heap backed by a static buffer in .bss.
-//
-// This is convenient early on when we don't yet have a physical memory map.
-void InitDefault();
-
-// Returns true once Init() has been called (either explicitly or via InitDefault()).
+// Returns true once Init() has been called.
 bool IsInitialized();
 
 // Allocates at least `size` bytes with `alignment` (power of two).
@@ -51,4 +46,4 @@ void Free(void* ptr);
 std::size_t TotalBytes();
 std::size_t FreeBytes();
 
-} // namespace Rocinante::Heap
+} // namespace Rocinante::Memory::Heap

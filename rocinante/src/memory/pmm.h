@@ -77,7 +77,7 @@ class PhysicalMemoryManager final {
 		std::uintptr_t TrackedPhysicalLimit() const { return m_tracked_physical_limit; }
 
 	private:
-		std::uint8_t* m_bitmap = nullptr;
+		std::uintptr_t m_bitmap_physical_base = 0;
 		std::size_t m_bitmap_size_bytes = 0;
 
 		std::uintptr_t m_tracked_physical_base = 0;
@@ -88,7 +88,17 @@ class PhysicalMemoryManager final {
 		std::size_t m_next_search_index = 0;
 		bool m_initialized = false;
 
-		bool _allocate_bitmap(std::size_t page_count);
+		std::uint8_t* _bitmap_ptr();
+		const std::uint8_t* _bitmap_ptr() const;
+
+		bool _allocate_bitmap(
+			const BootMemoryMap& boot_map,
+			std::size_t page_count,
+			std::uintptr_t kernel_physical_base,
+			std::uintptr_t kernel_physical_end,
+			std::uintptr_t device_tree_physical_base,
+			std::size_t device_tree_size_bytes
+		);
 		void _reset_state();
 
 		bool _mark_range_free(std::uintptr_t physical_base, std::size_t size_bytes);

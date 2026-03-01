@@ -230,9 +230,10 @@ static void Test_PMM_RespectsReservedKernelAndDTB(TestContext* ctx) {
 	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
 	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
 
-	// Expected free pages: total usable (16) minus reserved (2) minus kernel (4) minus DTB (1) = 9.
+	// Expected free pages: total usable (16) minus reserved (2) minus kernel (4) minus DTB (1)
+	// minus PMM bitmap storage (at least 1 page) = 8.
 	static constexpr std::size_t kExpectedTotalPages = 16;
-	static constexpr std::size_t kExpectedFreePages = 9;
+	static constexpr std::size_t kExpectedFreePages = 8;
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.TotalPages(), kExpectedTotalPages);
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), kExpectedFreePages);
 

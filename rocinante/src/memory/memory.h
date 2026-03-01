@@ -30,7 +30,6 @@ struct AddressLimits final {
 // Early memory initialization.
 //
 // What it does today:
-// - Initializes a bootstrap heap (Heap::InitDefault).
 // - Reads CPUCFG once and snapshots VALEN/PALEN.
 // - Computes a "recommended" heap virtual start based on the kernel end.
 //

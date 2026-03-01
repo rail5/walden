@@ -300,17 +300,17 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 		);
 
 		uart.puts("Paging bring-up: heap stats after init: total_bytes=");
-		uart.write_dec_u64(Rocinante::Heap::TotalBytes());
+		uart.write_dec_u64(Rocinante::Memory::Heap::TotalBytes());
 		uart.puts(" free_bytes=");
-		uart.write_dec_u64(Rocinante::Heap::FreeBytes());
+		uart.write_dec_u64(Rocinante::Memory::Heap::FreeBytes());
 		uart.putc('\n');
 
-		void* p = Rocinante::Heap::Alloc(64, 16);
+		void* p = Rocinante::Memory::Heap::Alloc(64, 16);
 		uart.puts("Paging bring-up: heap alloc(64,16) returned ");
 		uart.write_hex_u64(reinterpret_cast<std::uint64_t>(p));
 		uart.putc('\n');
 		if (p) {
-			Rocinante::Heap::Free(p);
+			Rocinante::Memory::Heap::Free(p);
 		}
 	} else {
 		uart.puts("Paging bring-up: heap after paging not configured; skipping heap handoff\n");

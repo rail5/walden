@@ -5,11 +5,40 @@
 
 #include "pmm.h"
 
-#include "heap.h"
+#include <src/memory/virtual_layout.h>
+#include <src/sp/cpucfg.h>
 
 namespace Rocinante::Memory {
 
 namespace {
+
+// LoongArch privileged architecture: CSR.CRMD (Current Mode Information).
+//
+// Spec anchor:
+// - LoongArch-Vol1-EN.html, Section 5.2 (Virtual Address Space and Address Translation Mode)
+//   - CRMD.DA=1, CRMD.PG=0 => direct address translation mode
+//   - CRMD.DA=0, CRMD.PG=1 => mapped address translation mode
+namespace Csr {
+	static constexpr std::uint32_t kCurrentModeInformation = 0x0; // CSR.CRMD
+}
+
+namespace CurrentModeInformation {
+	static constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3); // CRMD.DA
+	static constexpr std::uint64_t kPagingEnable = (1ull << 4);           // CRMD.PG
+}
+
+static inline std::uint64_t ReadCurrentModeInformation() {
+	std::uint64_t value;
+	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(Csr::kCurrentModeInformation));
+	return value;
+}
+
+static inline bool IsMappedAddressTranslationMode() {
+	const std::uint64_t crmd = ReadCurrentModeInformation();
+	const bool direct_addressing = (crmd & CurrentModeInformation::kDirectAddressingEnable) != 0;
+	const bool paging = (crmd & CurrentModeInformation::kPagingEnable) != 0;
+	return (!direct_addressing) && paging;
+}
 
 static constexpr std::uintptr_t AlignDown(std::uintptr_t value, std::size_t alignment) {
 	return value & ~(static_cast<std::uintptr_t>(alignment) - 1);
@@ -24,6 +53,20 @@ static constexpr bool AddOverflows(std::uintptr_t a, std::size_t b) {
 	return sum < a;
 }
 
+static bool RangesOverlap(
+	std::uintptr_t a_base,
+	std::size_t a_size,
+	std::uintptr_t b_base,
+	std::size_t b_size
+) {
+	if (a_size == 0 || b_size == 0) return false;
+	if (AddOverflows(a_base, a_size)) return true;
+	if (AddOverflows(b_base, b_size)) return true;
+	const std::uintptr_t a_end = a_base + static_cast<std::uintptr_t>(a_size);
+	const std::uintptr_t b_end = b_base + static_cast<std::uintptr_t>(b_size);
+	return (a_base < b_end) && (b_base < a_end);
+}
+
 } // namespace
 
 PhysicalMemoryManager& GetPhysicalMemoryManager() {
@@ -32,10 +75,7 @@ PhysicalMemoryManager& GetPhysicalMemoryManager() {
 }
 
 void PhysicalMemoryManager::_reset_state() {
-	if (m_bitmap) {
-		Rocinante::Heap::Free(m_bitmap);
-	}
-	m_bitmap = nullptr;
+	m_bitmap_physical_base = 0;
 	m_bitmap_size_bytes = 0;
 	m_tracked_physical_base = 0;
 	m_tracked_physical_limit = 0;
@@ -45,7 +85,40 @@ void PhysicalMemoryManager::_reset_state() {
 	m_initialized = false;
 }
 
-bool PhysicalMemoryManager::_allocate_bitmap(std::size_t page_count) {
+std::uint8_t* PhysicalMemoryManager::_bitmap_ptr() {
+	if (m_bitmap_physical_base == 0 || m_bitmap_size_bytes == 0) return nullptr;
+
+	if (!IsMappedAddressTranslationMode()) {
+		return reinterpret_cast<std::uint8_t*>(m_bitmap_physical_base);
+	}
+
+	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const std::uintptr_t physmap_virtual =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(m_bitmap_physical_base, virtual_address_bits);
+	return reinterpret_cast<std::uint8_t*>(physmap_virtual);
+}
+
+const std::uint8_t* PhysicalMemoryManager::_bitmap_ptr() const {
+	if (m_bitmap_physical_base == 0 || m_bitmap_size_bytes == 0) return nullptr;
+
+	if (!IsMappedAddressTranslationMode()) {
+		return reinterpret_cast<const std::uint8_t*>(m_bitmap_physical_base);
+	}
+
+	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const std::uintptr_t physmap_virtual =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(m_bitmap_physical_base, virtual_address_bits);
+	return reinterpret_cast<const std::uint8_t*>(physmap_virtual);
+}
+
+bool PhysicalMemoryManager::_allocate_bitmap(
+	const BootMemoryMap& boot_map,
+	std::size_t page_count,
+	std::uintptr_t kernel_physical_base,
+	std::uintptr_t kernel_physical_end,
+	std::uintptr_t device_tree_physical_base,
+	std::size_t device_tree_size_bytes
+) {
 	if (page_count == 0) return false;
 
 	// Bitmap encoding:
@@ -55,23 +128,74 @@ bool PhysicalMemoryManager::_allocate_bitmap(std::size_t page_count) {
 	const std::size_t bit_count = page_count;
 	const std::size_t byte_count = (bit_count + 7) / 8;
 	if (byte_count == 0) return false;
+	const std::size_t byte_count_aligned = (byte_count + 15u) & ~static_cast<std::size_t>(15u);
 
-	// Bootstrap heap-backed bitmap allocation.
+	// Heap-free bitmap allocation.
 	//
-	// This is safe because the bootstrap heap lives inside the kernel image
-	// range, which the PMM will reserve before any future allocator uses it.
-	void* bitmap = Rocinante::Heap::Alloc(byte_count, 16);
-	if (!bitmap) return false;
+	// We carve the bitmap storage out of a UsableRAM region described by the boot
+	// memory map. This keeps the PMM self-contained and avoids requiring any
+	// dynamic allocator for its own metadata.
+	std::uintptr_t chosen_base = 0;
+	for (std::size_t i = 0; i < boot_map.region_count; i++) {
+		const auto& r = boot_map.regions[i];
+		if (r.type != BootMemoryRegion::Type::UsableRAM) continue;
+		if (r.size_bytes == 0) continue;
+		if (AddOverflows(static_cast<std::uintptr_t>(r.physical_base), static_cast<std::size_t>(r.size_bytes))) continue;
 
-	m_bitmap = static_cast<std::uint8_t*>(bitmap);
-	m_bitmap_size_bytes = byte_count;
+		const std::uintptr_t region_begin = static_cast<std::uintptr_t>(r.physical_base);
+		const std::uintptr_t region_end = region_begin + static_cast<std::uintptr_t>(r.size_bytes);
+		std::uintptr_t candidate = AlignUp(region_begin, 16);
+		if (candidate < region_begin) continue;
+
+		// If the region begins under the kernel/DTB reservations (common in tests
+		// and some boot environments), advance to the end of the overlapping range
+		// and retry within the same UsableRAM region.
+		for (std::size_t bump = 0; bump < 4; bump++) {
+			if (candidate < region_begin) break;
+			if (AddOverflows(candidate, byte_count_aligned)) break;
+			const std::uintptr_t candidate_end = candidate + static_cast<std::uintptr_t>(byte_count_aligned);
+			if (candidate_end > region_end) break;
+
+			bool bumped = false;
+			if (kernel_physical_end > kernel_physical_base) {
+				const std::size_t kernel_size = static_cast<std::size_t>(kernel_physical_end - kernel_physical_base);
+				if (RangesOverlap(candidate, byte_count_aligned, kernel_physical_base, kernel_size)) {
+					candidate = AlignUp(kernel_physical_end, 16);
+					bumped = true;
+				}
+			}
+
+			if (!bumped && device_tree_physical_base != 0 && device_tree_size_bytes != 0) {
+				if (RangesOverlap(candidate, byte_count_aligned, device_tree_physical_base, device_tree_size_bytes)) {
+					if (AddOverflows(device_tree_physical_base, device_tree_size_bytes)) break;
+					const std::uintptr_t dtb_end = device_tree_physical_base + static_cast<std::uintptr_t>(device_tree_size_bytes);
+					candidate = AlignUp(dtb_end, 16);
+					bumped = true;
+				}
+			}
+
+			if (!bumped) {
+				chosen_base = candidate;
+				break;
+			}
+		}
+
+		if (chosen_base != 0) break;
+	}
+
+	if (chosen_base == 0) return false;
+
+	m_bitmap_physical_base = chosen_base;
+	m_bitmap_size_bytes = byte_count_aligned;
+	std::uint8_t* bitmap = _bitmap_ptr();
+	if (!bitmap) return false;
 
 	// Default to "used" for everything.
 	//
 	// Policy note: pages not explicitly described as UsableRAM are treated as
 	// non-allocatable.
-	for (std::size_t i = 0; i < byte_count; i++) {
-		m_bitmap[i] = 0xFF;
+	for (std::size_t i = 0; i < byte_count_aligned; i++) {
+		bitmap[i] = 0xFF;
 	}
 
 	return true;
@@ -80,19 +204,25 @@ bool PhysicalMemoryManager::_allocate_bitmap(std::size_t page_count) {
 bool PhysicalMemoryManager::_is_page_used(std::size_t page_index) const {
 	const std::size_t byte_index = page_index / 8;
 	const std::size_t bit_index = page_index % 8;
-	return (m_bitmap[byte_index] & (1u << bit_index)) != 0;
+	const std::uint8_t* bitmap = _bitmap_ptr();
+	if (!bitmap) return true;
+	return (bitmap[byte_index] & (1u << bit_index)) != 0;
 }
 
 void PhysicalMemoryManager::_set_page_used(std::size_t page_index) {
 	const std::size_t byte_index = page_index / 8;
 	const std::size_t bit_index = page_index % 8;
-	m_bitmap[byte_index] |= static_cast<std::uint8_t>(1u << bit_index);
+	std::uint8_t* bitmap = _bitmap_ptr();
+	if (!bitmap) return;
+	bitmap[byte_index] |= static_cast<std::uint8_t>(1u << bit_index);
 }
 
 void PhysicalMemoryManager::_set_page_free(std::size_t page_index) {
 	const std::size_t byte_index = page_index / 8;
 	const std::size_t bit_index = page_index % 8;
-	m_bitmap[byte_index] &= static_cast<std::uint8_t>(~(1u << bit_index));
+	std::uint8_t* bitmap = _bitmap_ptr();
+	if (!bitmap) return;
+	bitmap[byte_index] &= static_cast<std::uint8_t>(~(1u << bit_index));
 }
 
 std::uintptr_t PhysicalMemoryManager::_page_index_to_physical(std::size_t page_index) const {
@@ -201,7 +331,14 @@ bool PhysicalMemoryManager::InitializeFromBootMemoryMap(
 	m_page_count = static_cast<std::size_t>((m_tracked_physical_limit - m_tracked_physical_base) / kPageSizeBytes);
 	if (m_page_count == 0) return false;
 
-	if (!_allocate_bitmap(m_page_count)) {
+	if (!_allocate_bitmap(
+		boot_map,
+		m_page_count,
+		kernel_physical_base,
+		kernel_physical_end,
+		device_tree_physical_base,
+		device_tree_size_bytes
+	)) {
 		_reset_state();
 		return false;
 	}
@@ -237,6 +374,14 @@ bool PhysicalMemoryManager::InitializeFromBootMemoryMap(
 	// 4) Proactively reserve the DTB blob range.
 	if (device_tree_physical_base != 0 && device_tree_size_bytes != 0) {
 		if (!_mark_range_used(device_tree_physical_base, device_tree_size_bytes)) {
+			_reset_state();
+			return false;
+		}
+	}
+
+	// 4.5) Reserve the bitmap storage pages.
+	if (m_bitmap_physical_base != 0 && m_bitmap_size_bytes != 0) {
+		if (!_mark_range_used(m_bitmap_physical_base, m_bitmap_size_bytes)) {
 			_reset_state();
 			return false;
 		}
