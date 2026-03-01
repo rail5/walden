@@ -261,6 +261,40 @@ static void Test_PMM_RespectsReservedKernelAndDTB(TestContext* ctx) {
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), 0);
 }
 
+static void Test_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+
+	// Regression: real bring-up often reports a single large UsableRAM region,
+	// with the kernel image and DTB ranges living inside it.
+	//
+	// If the PMM's bitmap-carving logic only tries the start of the UsableRAM
+	// region and rejects overlaps, PMM initialization fails.
+	static constexpr std::uintptr_t kUsableBase = 0x00000000;
+	static constexpr std::size_t kUsableSizeBytes = 1024 * PhysicalMemoryManager::kPageSizeBytes; // 4 MiB
+
+	static constexpr std::uintptr_t kKernelBase = 0x00000000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00100000; // 1 MiB
+
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00100000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = 0x00100000; // 1 MiB
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	// Usable pages: 1024.
+	// Reserved pages: kernel (256) + DTB (256) + bitmap storage (1 page for 1024 tracked pages).
+	static constexpr std::size_t kExpectedTotalPages = 1024;
+	static constexpr std::size_t kExpectedFreePages = 1024 - 256 - 256 - 1;
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.TotalPages(), kExpectedTotalPages);
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), kExpectedFreePages);
+}
+
 static void Test_Paging_MapTranslateUnmap(TestContext* ctx) {
 	using Rocinante::Memory::BootMemoryRegion;
 	using Rocinante::Memory::BootMemoryMap;
@@ -881,6 +915,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.Paging.MapTranslateUnmap", &Test_Paging_MapTranslateUnmap},
 	{"Memory.Paging.RespectsVALENAndPALEN", &Test_Paging_RespectsVALENAndPALEN},
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &Test_PMM_RespectsReservedKernelAndDTB},
+	{"Memory.PMM.Initialize.SingleUsableRegionContainingKernelAndDTB", &Test_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB},
 	{"Memory.PagingHw.EnablePaging.TlbRefillSmoke", &Test_PagingHw_EnablePaging_TlbRefillSmoke},
 	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV},
 	{"Memory.PagingHw.PostPaging.MapUnmap.Faults", &Test_PagingHw_PostPaging_MapUnmap_Faults},

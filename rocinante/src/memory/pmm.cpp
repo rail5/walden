@@ -86,7 +86,7 @@ void PhysicalMemoryManager::_reset_state() {
 }
 
 std::uint8_t* PhysicalMemoryManager::_bitmap_ptr() {
-	if (m_bitmap_physical_base == 0 || m_bitmap_size_bytes == 0) return nullptr;
+	if (m_bitmap_size_bytes == 0) return nullptr;
 
 	if (!IsMappedAddressTranslationMode()) {
 		return reinterpret_cast<std::uint8_t*>(m_bitmap_physical_base);
@@ -99,7 +99,7 @@ std::uint8_t* PhysicalMemoryManager::_bitmap_ptr() {
 }
 
 const std::uint8_t* PhysicalMemoryManager::_bitmap_ptr() const {
-	if (m_bitmap_physical_base == 0 || m_bitmap_size_bytes == 0) return nullptr;
+	if (m_bitmap_size_bytes == 0) return nullptr;
 
 	if (!IsMappedAddressTranslationMode()) {
 		return reinterpret_cast<const std::uint8_t*>(m_bitmap_physical_base);
@@ -128,7 +128,8 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 	const std::size_t bit_count = page_count;
 	const std::size_t byte_count = (bit_count + 7) / 8;
 	if (byte_count == 0) return false;
-	const std::size_t byte_count_aligned = (byte_count + 15u) & ~static_cast<std::size_t>(15u);
+	const std::size_t bitmap_alloc_size_bytes = AlignUp(byte_count, kPageSizeBytes);
+	if (bitmap_alloc_size_bytes == 0) return false;
 
 	// Heap-free bitmap allocation.
 	//
@@ -144,32 +145,36 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 
 		const std::uintptr_t region_begin = static_cast<std::uintptr_t>(r.physical_base);
 		const std::uintptr_t region_end = region_begin + static_cast<std::uintptr_t>(r.size_bytes);
-		std::uintptr_t candidate = AlignUp(region_begin, 16);
+
+		// Never place metadata into the zero page.
+		std::uintptr_t candidate = region_begin;
+		if (candidate < kPageSizeBytes) candidate = kPageSizeBytes;
+		candidate = AlignUp(candidate, kPageSizeBytes);
 		if (candidate < region_begin) continue;
 
-		// If the region begins under the kernel/DTB reservations (common in tests
-		// and some boot environments), advance to the end of the overlapping range
-		// and retry within the same UsableRAM region.
-		for (std::size_t bump = 0; bump < 4; bump++) {
+		// If the region begins under the kernel/DTB reservations (in
+		// bring-up: a single big UsableRAM region), advance within the same region
+		// instead of rejecting it outright.
+		for (std::size_t bump = 0; bump < 8; bump++) {
 			if (candidate < region_begin) break;
-			if (AddOverflows(candidate, byte_count_aligned)) break;
-			const std::uintptr_t candidate_end = candidate + static_cast<std::uintptr_t>(byte_count_aligned);
+			if (AddOverflows(candidate, bitmap_alloc_size_bytes)) break;
+			const std::uintptr_t candidate_end = candidate + static_cast<std::uintptr_t>(bitmap_alloc_size_bytes);
 			if (candidate_end > region_end) break;
 
 			bool bumped = false;
 			if (kernel_physical_end > kernel_physical_base) {
 				const std::size_t kernel_size = static_cast<std::size_t>(kernel_physical_end - kernel_physical_base);
-				if (RangesOverlap(candidate, byte_count_aligned, kernel_physical_base, kernel_size)) {
-					candidate = AlignUp(kernel_physical_end, 16);
+				if (RangesOverlap(candidate, bitmap_alloc_size_bytes, kernel_physical_base, kernel_size)) {
+					candidate = AlignUp(kernel_physical_end, kPageSizeBytes);
 					bumped = true;
 				}
 			}
 
 			if (!bumped && device_tree_physical_base != 0 && device_tree_size_bytes != 0) {
-				if (RangesOverlap(candidate, byte_count_aligned, device_tree_physical_base, device_tree_size_bytes)) {
+				if (RangesOverlap(candidate, bitmap_alloc_size_bytes, device_tree_physical_base, device_tree_size_bytes)) {
 					if (AddOverflows(device_tree_physical_base, device_tree_size_bytes)) break;
 					const std::uintptr_t dtb_end = device_tree_physical_base + static_cast<std::uintptr_t>(device_tree_size_bytes);
-					candidate = AlignUp(dtb_end, 16);
+					candidate = AlignUp(dtb_end, kPageSizeBytes);
 					bumped = true;
 				}
 			}
@@ -186,7 +191,7 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 	if (chosen_base == 0) return false;
 
 	m_bitmap_physical_base = chosen_base;
-	m_bitmap_size_bytes = byte_count_aligned;
+	m_bitmap_size_bytes = bitmap_alloc_size_bytes;
 	std::uint8_t* bitmap = _bitmap_ptr();
 	if (!bitmap) return false;
 
@@ -194,7 +199,7 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 	//
 	// Policy note: pages not explicitly described as UsableRAM are treated as
 	// non-allocatable.
-	for (std::size_t i = 0; i < byte_count_aligned; i++) {
+	for (std::size_t i = 0; i < bitmap_alloc_size_bytes; i++) {
 		bitmap[i] = 0xFF;
 	}
 
@@ -380,7 +385,7 @@ bool PhysicalMemoryManager::InitializeFromBootMemoryMap(
 	}
 
 	// 4.5) Reserve the bitmap storage pages.
-	if (m_bitmap_physical_base != 0 && m_bitmap_size_bytes != 0) {
+	if (m_bitmap_size_bytes != 0) {
 		if (!_mark_range_used(m_bitmap_physical_base, m_bitmap_size_bytes)) {
 			_reset_state();
 			return false;
