@@ -86,6 +86,7 @@ static inline void ClearPendingTimerInterruptInCsr() {
 }
 
 extern "C" void __exception_entry();
+extern "C" void __tlb_refill_entry();
 
 } // namespace
 
@@ -100,9 +101,21 @@ void Initialize() {
 	// We also start with all interrupt lines masked.
 	WriteExceptionConfiguration(0);
 
-	const auto entry = reinterpret_cast<std::uint64_t>(&__exception_entry);
+	// Spec behavior (LoongArch-Vol1-EN.html):
+	// - CSR.EENTRY[11:0] is read-only constant 0 (writes ignored)
+	// - CSR.TLBRENTRY[11:0] is read-only constant 0 (writes ignored)
+	//
+	// Masking here ensures we write the *effective* entry base address the CPU
+	// will use, even if the symbol address were ever to become misaligned.
+	constexpr std::uint64_t k4KiBPageOffsetMask = 0xfffull;
+	constexpr std::uint64_t k4KiBPageBaseMask = ~k4KiBPageOffsetMask;
+	const auto entry = reinterpret_cast<std::uint64_t>(&__exception_entry) & k4KiBPageBaseMask;
 	WriteExceptionEntryAddress(entry);
-	WriteTlbRefillEntryAddress(entry);
+
+	// The TLB refill exception has a distinct entry point and distinct CSRs.
+	// Install a dedicated refill stub that performs software-led TLB refill.
+	const auto tlb_refill_entry = reinterpret_cast<std::uint64_t>(&__tlb_refill_entry) & k4KiBPageBaseMask;
+	WriteTlbRefillEntryAddress(tlb_refill_entry);
 	WriteMachineErrorEntryAddress(entry);
 }
 

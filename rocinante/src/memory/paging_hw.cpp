@@ -21,6 +21,17 @@ namespace CurrentModeInformation {
 	constexpr std::uint64_t kPagingEnable = (1ull << 4);
 	// CRMD.DA (bit 3): direct addressing enable.
 	constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3);
+
+	// CRMD.DATF (bits 6:5): direct addressing translation mode for fetch.
+	constexpr std::uint64_t kDirectTranslationFetchShift = 5;
+	constexpr std::uint64_t kDirectTranslationFetchMask = (3ull << kDirectTranslationFetchShift);
+
+	// CRMD.DATM (bits 8:7): direct addressing translation mode for memory access.
+	constexpr std::uint64_t kDirectTranslationMemoryShift = 7;
+	constexpr std::uint64_t kDirectTranslationMemoryMask = (3ull << kDirectTranslationMemoryShift);
+
+	// Spec guidance for software-managed TLB refill when enabling paging.
+	constexpr std::uint64_t kDirectTranslationConsistentCacheable = 0b01;
 }
 
 static inline std::uint64_t ReadCsr(std::uint32_t csr) {
@@ -36,6 +47,17 @@ static inline void WriteCsr(std::uint32_t csr, std::uint64_t value) {
 } // namespace
 
 namespace Rocinante::Memory::PagingHw {
+
+void InvalidateAllTlbEntries() {
+	// LoongArch-Vol1-EN.html, Section 4.2.4.7 (INVTLB):
+	// op=0x0 => "Clear all page table entries".
+	//
+	// Bring-up rationale:
+	// When switching translation modes (direct -> mapped) and installing a new
+	// page-table root, starting from a known-empty TLB reduces the chance of
+	// confusing stale translation state with page-table encoding issues.
+	asm volatile("invtlb 0x0, $r0, $r0" ::: "memory");
+}
 
 Rocinante::Optional<PageWalkerConfig> Make4KiBPageWalkerConfig(Paging::AddressSpaceBits address_bits) {
 	// PWCL/PWCH define the multi-level page-table shape used by page walking.
@@ -127,6 +149,10 @@ void ConfigurePageTableWalker(const Paging::PageTableRoot& root, PageWalkerConfi
 
 void EnablePaging() {
 	std::uint64_t crmd = ReadCsr(Csr::kCurrentModeInformation);
+	crmd &= ~CurrentModeInformation::kDirectTranslationFetchMask;
+	crmd &= ~CurrentModeInformation::kDirectTranslationMemoryMask;
+	crmd |= (CurrentModeInformation::kDirectTranslationConsistentCacheable << CurrentModeInformation::kDirectTranslationFetchShift);
+	crmd |= (CurrentModeInformation::kDirectTranslationConsistentCacheable << CurrentModeInformation::kDirectTranslationMemoryShift);
 	crmd |= CurrentModeInformation::kPagingEnable;
 	crmd &= ~CurrentModeInformation::kDirectAddressingEnable;
 	WriteCsr(Csr::kCurrentModeInformation, crmd);

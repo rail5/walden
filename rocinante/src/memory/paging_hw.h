@@ -51,6 +51,15 @@ Rocinante::Optional<PageWalkerConfig> Make4KiBPageWalkerConfig(Paging::AddressSp
 void ConfigurePageTableWalker(const Paging::PageTableRoot& root, PageWalkerConfig config);
 
 /**
+ * @brief Invalidates all TLB entries.
+ *
+ * Spec:
+ * - LoongArch-Vol1-EN.html, Section 4.2.4.7 (INVTLB)
+ *   op=0x0: "Clear all page table entries"
+ */
+void InvalidateAllTlbEntries();
+
+/**
  * @brief Switches the CPU from direct-address mode to paging mode.
  *
  * Policy:

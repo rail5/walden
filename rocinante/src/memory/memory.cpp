@@ -20,11 +20,20 @@ static AddressLimits g_limits{};
 static std::uintptr_t g_recommended_heap_base = 0;
 
 static constexpr std::uintptr_t AlignUp(std::uintptr_t value, std::size_t alignment) {
-	return (value + (alignment - 1)) & ~(static_cast<std::uintptr_t>(alignment) - 1);
+	// Align `value` up to the next multiple of `alignment`.
+	//
+	// NOTE: For current uses (heap base alignment) `alignment` is a small constant
+	// (e.g. 16). We implement the general form here to avoid relying on the
+	// power-of-two bitmask trick.
+	if (alignment == 0) return value;
+	const std::uintptr_t remainder = value % alignment;
+	if (remainder == 0) return value;
+	return value + (alignment - remainder);
 }
 
 static std::uint64_t MaxForWidth(std::uint32_t width_bits) {
-	// For the widths LoongArch reports (typically 40..48 for VALEN according to the reference manual), this is safe.
+	// This code path assumes CPUCFG-reported address widths are within the range
+	// our masks can represent.
 	// If a future CPU reports 64, "2^64 - 1" would overflow; treat it as all-ones.
 	if (width_bits >= 64) return ~0ull;
 	return (1ull << width_bits) - 1ull;

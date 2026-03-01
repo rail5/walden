@@ -57,11 +57,8 @@ CXXFLAGS       = $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++23
 LDFLAGS        = --target=$(TARGET_TRIPLE) -fuse-ld=lld -nostdlib -static -Wl,-no-pie -Wl,-T,$(LINKER_LD) -Wl,-s
 
 ifeq ($(ROCINANTE_PAGING_BRINGUP),1)
+	CFLAGS += -DROCINANTE_PAGING_BRINGUP
 	CXXFLAGS += -DROCINANTE_PAGING_BRINGUP
-endif
-
-ifeq ($(ROCINANTE_ENABLE_PAGING_NOW),1)
-	CXXFLAGS += -DROCINANTE_ENABLE_PAGING_NOW
 endif
 
 ifeq ($(ROCINANTE_TESTS),1)
@@ -123,10 +120,15 @@ run: $(TARGET)
 	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
 		-monitor none -kernel $< -append "test=1"
 
+run-serial: $(TARGET)
+	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
+		-nographic -serial stdio -monitor none \
+		-kernel $< -append "test=1"
+
 test:
 	@$(MAKE) -C $(PROJECT_ROOT_DIRECTORY) ROCINANTE_TESTS=1 MAKEFLAGS= clean all
 	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
 		-nographic -serial stdio -monitor none \
 		-kernel $(PROJECT_ROOT_DIRECTORY)/$(TARGET)
 
-.PHONY: all check-toolchain clean run test run-tests
+.PHONY: all check-toolchain clean run run-serial test run-tests

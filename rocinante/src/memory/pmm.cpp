@@ -242,6 +242,19 @@ bool PhysicalMemoryManager::InitializeFromBootMemoryMap(
 		}
 	}
 
+	// 5) Proactively reserve the zero page.
+	//
+	// Why:
+	// - The kernel frequently uses 0 as a sentinel for "invalid physical address".
+	// - Some early bring-up code (page tables, scratch buffers) dereferences
+	//   physical addresses directly while CRMD.DA=1, so allocating physical 0
+	//   would imply dereferencing a null pointer.
+	//
+	// Policy:
+	// Treat physical page [0, 4KiB) as permanently reserved if it is within the
+	// tracked range.
+	(void)_mark_range_used(0, kPageSizeBytes);
+
 	// Finalize free-page accounting.
 	std::size_t free_pages = 0;
 	for (std::size_t i = 0; i < m_page_count; i++) {

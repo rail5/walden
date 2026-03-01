@@ -14,6 +14,10 @@
 #include <src/memory/boot_memory_map.h>
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
+#include <src/memory/paging_hw.h>
+
+extern "C" char _start;
+extern "C" char _end;
 
 namespace Rocinante::Testing {
 
@@ -363,6 +367,169 @@ static void Test_Paging_RespectsVALENAndPALEN(TestContext* ctx) {
 	ROCINANTE_EXPECT_TRUE(ctx, !MapPage4KiB(&pmm, root.value(), kGoodVirtualLow + PhysicalMemoryManager::kPageSizeBytes, bad_physical, permissions, bits));
 }
 
+static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapPage4KiB;
+	using Rocinante::Memory::Paging::MapRange4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+
+	// This is an end-to-end smoke test for the paging bring-up path.
+	//
+	// What it guards against:
+	// - regressions where enabling paging immediately traps/hangs due to broken
+	//   TLBR refill walking (the failure mode we debugged today).
+	//
+	// WARNING:
+	// - This permanently enables paging for the remainder of the test run.
+	// - Therefore it must be the last test in the suite.
+	//
+	// Minimal requirements before enabling paging:
+	// - identity map the current kernel image (PC + stack + globals)
+	// - map UART and syscon MMIO (tests print after enabling; kernel shuts down)
+	// - configure PWCL/PWCH/PGD, invalidate the TLB, then flip CRMD.PG/CRMD.DA
+
+	auto& cpucfg = Rocinante::GetCPUCFG();
+	ROCINANTE_EXPECT_TRUE(ctx, cpucfg.MMUSupportsPageMappingMode());
+
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = static_cast<std::uint8_t>(cpucfg.VirtualAddressBits()),
+		.physical_address_bits = static_cast<std::uint8_t>(cpucfg.PhysicalAddressBits()),
+	};
+
+	// Choose a PMM allocation pool that is:
+	// - within QEMU RAM (256 MiB @ physical base 0)
+	// - away from the kernel image and common low-memory boot blobs (DTB)
+	static constexpr std::uintptr_t kUsableBase = 0x01000000; // 16 MiB
+	static constexpr std::size_t kUsableSizeBytes = 32u * 1024u * 1024u; // 32 MiB
+
+	const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+	const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+	ROCINANTE_EXPECT_TRUE(ctx, kernel_physical_end > kernel_physical_base);
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{
+		.physical_base = kUsableBase,
+		.size_bytes = kUsableSizeBytes,
+		.type = BootMemoryRegion::Type::UsableRAM,
+	}));
+
+	// We don't have a DTB pointer in the test environment; keep the DTB reservation empty.
+	static constexpr std::uintptr_t kDeviceTreeBase = 0;
+	static constexpr std::size_t kDeviceTreeSizeBytes = 0;
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(
+		map,
+		kernel_physical_base,
+		kernel_physical_end,
+		kDeviceTreeBase,
+		kDeviceTreeSizeBytes));
+
+	const auto root = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root.has_value());
+
+	const PagePermissions kernel_permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::Executable,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	const PagePermissions mmio_permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::StrongUncached,
+		.global = true,
+	};
+
+	// Identity map the running kernel image.
+	const std::uintptr_t kernel_size_bytes = kernel_physical_end - kernel_physical_base;
+	const std::size_t kernel_size_rounded =
+		static_cast<std::size_t>((kernel_size_bytes + Rocinante::Memory::Paging::kPageSizeBytes - 1) &
+			~(Rocinante::Memory::Paging::kPageSizeBytes - 1));
+	ROCINANTE_EXPECT_TRUE(ctx, MapRange4KiB(
+		&pmm,
+		root.value(),
+		kernel_physical_base,
+		kernel_physical_base,
+		kernel_size_rounded,
+		kernel_permissions,
+		address_bits));
+
+	// Identity map UART16550 MMIO page so test output continues in mapped mode.
+	// QEMU LoongArch virt: UART16550 base is 0x1fe001e0.
+	static constexpr std::uintptr_t kUartPhysicalBase = 0x1fe001e0ull;
+	const std::uintptr_t uart_page_base = kUartPhysicalBase & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+	ROCINANTE_EXPECT_TRUE(ctx, MapRange4KiB(
+		&pmm,
+		root.value(),
+		uart_page_base,
+		uart_page_base,
+		Rocinante::Memory::Paging::kPageSizeBytes,
+		mmio_permissions,
+		address_bits));
+
+	// Identity map syscon-poweroff MMIO page so kernel_main can shut down after tests.
+	// QEMU LoongArch virt: syscon-poweroff uses a syscon at 0x100e001c.
+	static constexpr std::uintptr_t kSysconPhysicalBase = 0x100e001cull;
+	const std::uintptr_t syscon_page_base = kSysconPhysicalBase & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+	ROCINANTE_EXPECT_TRUE(ctx, MapRange4KiB(
+		&pmm,
+		root.value(),
+		syscon_page_base,
+		syscon_page_base,
+		Rocinante::Memory::Paging::kPageSizeBytes,
+		mmio_permissions,
+		address_bits));
+
+	// Map a scratch page at a non-identity virtual address so we can force a
+	// translation that must be serviced via TLBR refill.
+	static constexpr std::uintptr_t kScratchVirtualPageBase = 0x0000000100000000ull; // 4 GiB
+	const auto scratch_page = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, scratch_page.has_value());
+	const std::uintptr_t scratch_physical_page_base = scratch_page.value();
+
+	// Initialize physical memory while still in direct-address mode.
+	auto* scratch_physical_u64 = reinterpret_cast<volatile std::uint64_t*>(scratch_physical_page_base);
+	*scratch_physical_u64 = 0x1122334455667788ull;
+
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(
+		&pmm,
+		root.value(),
+		kScratchVirtualPageBase,
+		scratch_physical_page_base,
+		PagePermissions{
+			.access = AccessPermissions::ReadWrite,
+			.execute = ExecutePermissions::NoExecute,
+			.cache = CacheMode::CoherentCached,
+			.global = true,
+		},
+		address_bits));
+
+	const auto config_or = Rocinante::Memory::PagingHw::Make4KiBPageWalkerConfig(address_bits);
+	ROCINANTE_EXPECT_TRUE(ctx, config_or.has_value());
+	Rocinante::Memory::PagingHw::ConfigurePageTableWalker(root.value(), config_or.value());
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::EnablePaging();
+
+	// Mapped-mode access: this should trigger TLBR refill (TLB is invalidated)
+	// and then succeed.
+	auto* scratch_virtual_u64 = reinterpret_cast<volatile std::uint64_t*>(kScratchVirtualPageBase);
+	const auto observed = *scratch_virtual_u64;
+	ROCINANTE_EXPECT_EQ_U64(ctx, observed, 0x1122334455667788ull);
+	*scratch_virtual_u64 = 0xaabbccddeeff0011ull;
+	const auto observed2 = *reinterpret_cast<volatile std::uint64_t*>(kScratchVirtualPageBase);
+	ROCINANTE_EXPECT_EQ_U64(ctx, observed2, 0xaabbccddeeff0011ull);
+}
+
 } // namespace
 
 extern const TestCase g_test_cases[] = {
@@ -374,6 +541,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.Paging.MapTranslateUnmap", &Test_Paging_MapTranslateUnmap},
 	{"Memory.Paging.RespectsVALENAndPALEN", &Test_Paging_RespectsVALENAndPALEN},
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &Test_PMM_RespectsReservedKernelAndDTB},
+	{"Memory.PagingHw.EnablePaging.TlbRefillSmoke", &Test_PagingHw_EnablePaging_TlbRefillSmoke},
 };
 
 extern const std::size_t g_test_case_count = sizeof(g_test_cases) / sizeof(g_test_cases[0]);

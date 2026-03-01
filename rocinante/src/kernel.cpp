@@ -4,9 +4,7 @@
  */
 
 #include "kernel.h"
-
 #include <src/memory/memory.h>
-#include <src/memory/boot_memory_map.h>
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
 #include <src/memory/paging_hw.h>
@@ -234,6 +232,7 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 
 	// LoongArch EXCCODE values (subset used for early bring-up).
 	constexpr std::uint64_t kExceptionCodeBreak = 0x0c;
+	// ESTAT.IS bit 11 corresponds to the timer interrupt line (see src/trap.cpp).
 	constexpr std::uint64_t kTimerInterruptLineBit = (1ull << 11);
 
 	// Interrupts arrive with EXCCODE=0 and the pending lines in ESTAT.IS.
@@ -245,8 +244,12 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 
 	if (exception_code == kExceptionCodeBreak) {
 		uart.puts("\n*** TRAP: BRK ***\n");
-		uart.puts("ERA:   "); uart.write_hex_u64(tf->exception_return_address); uart.putc('\n');
-		uart.puts("ESTAT: "); uart.write_hex_u64(tf->exception_status); uart.putc('\n');
+		uart.puts("CSR.ERA (exception return address): ");
+		uart.write_hex_u64(tf->exception_return_address);
+		uart.putc('\n');
+		uart.puts("CSR.ESTAT (exception status):       ");
+		uart.write_hex_u64(tf->exception_status);
+		uart.putc('\n');
 		uart.puts("SUB:   "); uart.write_dec_u64(exception_subcode); uart.putc('\n');
 
 		// Skip the BREAK instruction so we can prove ERTN return works.
@@ -263,12 +266,24 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	uart.puts(" SUB="); uart.write_hex_u64(exception_subcode);
 	uart.puts(")\n");
 
-	uart.puts("ERA:   "); uart.write_hex_u64(tf->exception_return_address); uart.putc('\n');
-	uart.puts("ESTAT: "); uart.write_hex_u64(tf->exception_status); uart.putc('\n');
-	uart.puts("BADV:  "); uart.write_hex_u64(tf->bad_virtual_address); uart.putc('\n');
-	uart.puts("CRMD:  "); uart.write_hex_u64(tf->current_mode_information); uart.putc('\n');
-	uart.puts("PRMD:  "); uart.write_hex_u64(tf->previous_mode_information); uart.putc('\n');
-	uart.puts("ECFG:  "); uart.write_hex_u64(tf->exception_configuration); uart.putc('\n');
+	uart.puts("CSR.ERA (exception return address): ");
+	uart.write_hex_u64(tf->exception_return_address);
+	uart.putc('\n');
+	uart.puts("CSR.ESTAT (exception status):       ");
+	uart.write_hex_u64(tf->exception_status);
+	uart.putc('\n');
+	uart.puts("CSR.BADV (bad virtual address):     ");
+	uart.write_hex_u64(tf->bad_virtual_address);
+	uart.putc('\n');
+	uart.puts("CSR.CRMD (current mode info):       ");
+	uart.write_hex_u64(tf->current_mode_information);
+	uart.putc('\n');
+	uart.puts("CSR.PRMD (previous mode info):      ");
+	uart.write_hex_u64(tf->previous_mode_information);
+	uart.putc('\n');
+	uart.puts("CSR.ECFG (exception config):        ");
+	uart.write_hex_u64(tf->exception_configuration);
+	uart.putc('\n');
 
 	DumpTlbRefillCsrsIfActive(uart);
 	DumpMappedTranslationCsrs(uart);
@@ -347,13 +362,13 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 				// Paging bring-up is intentionally compile-time gated.
 				//
 				// Flaw / bring-up gap:
-				// - We have not yet validated our page table entry encoding against the
 				//   LoongArch privileged spec end-to-end.
-					// - We do not yet establish a higher-half kernel. We do, however, build a
-					//   minimal higher-half physmap so future paging code can access physical
-					//   frames via a stable VA once paging is enabled.
-				// - Therefore, default behavior is to build page tables and print diagnostics
-				//   only; enabling paging requires opting in.
+				// - We do not yet establish a higher-half kernel. We do, however, build a
+				//   minimal higher-half physmap so future paging code can access physical
+				//   frames via a stable VA once paging is enabled.
+				// - ROCINANTE_PAGING_BRINGUP enables the end-to-end switch into mapped mode.
+				//   If we want a "build tables only" diagnostic build again, we can
+				//   reintroduce a separate flag once the end-to-end path is stable.
 				#if defined(ROCINANTE_PAGING_BRINGUP)
 				uart.puts("\nPaging bring-up: building bootstrap page tables\n");
 
@@ -524,8 +539,99 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 							uart.write(Rocinante::to_string(kernel_physical_end));
 							uart.puts(")\n");
 
-							// Configure the hardware page walker but do not enable paging unless
-							// explicitly requested.
+							// Bring-up self-check: confirm the software-built tables contain a
+							// translation for a kernel address before enabling paging.
+							//
+							// This helps distinguish "page tables not populated" from
+							// "TLB refill walk mismatch".
+							const auto DumpPagingProbe = [&](std::uintptr_t probe_va) {
+								uart.puts("Paging bring-up: probe_va=");
+								uart.write(Rocinante::to_string(probe_va));
+								uart.putc('\n');
+
+								const auto translated = Rocinante::Memory::Paging::Translate(root, probe_va, address_bits);
+								uart.puts("Paging bring-up: translate=");
+								if (translated.has_value()) {
+									uart.write(Rocinante::to_string(translated.value()));
+								} else {
+									uart.puts("<none>");
+								}
+								uart.putc('\n');
+
+								// Assumes 4-level, 4 KiB paging layout for the current QEMU bring-up
+								// configuration: Dir3 -> Dir2 -> Dirl -> PT -> 4 KiB page.
+								// (Indices are 9 bits each.)
+								constexpr std::size_t kIndexMask =
+									(1u << Rocinante::Memory::Paging::kIndexBitsPerLevel) - 1u;
+								constexpr std::size_t kShiftPt = Rocinante::Memory::Paging::kPageShiftBits;
+								constexpr std::size_t kShiftDirl = kShiftPt + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+								constexpr std::size_t kShiftDir2 = kShiftDirl + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+								constexpr std::size_t kShiftDir3 = kShiftDir2 + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+
+								const std::size_t idx_dir3 = static_cast<std::size_t>((probe_va >> kShiftDir3) & kIndexMask);
+								const std::size_t idx_dir2 = static_cast<std::size_t>((probe_va >> kShiftDir2) & kIndexMask);
+								const std::size_t idx_dirl = static_cast<std::size_t>((probe_va >> kShiftDirl) & kIndexMask);
+								const std::size_t idx_pt = static_cast<std::size_t>((probe_va >> kShiftPt) & kIndexMask);
+
+								uart.puts("Paging bring-up: idx d3=");
+								uart.write(Rocinante::to_string(idx_dir3));
+								uart.puts(" d2=");
+								uart.write(Rocinante::to_string(idx_dir2));
+								uart.puts(" dl=");
+								uart.write(Rocinante::to_string(idx_dirl));
+								uart.puts(" pt=");
+								uart.write(Rocinante::to_string(idx_pt));
+								uart.putc('\n');
+
+								auto* dir3 = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(root.root_physical_address);
+								const auto IsWalkable = [](std::uint64_t entry) {
+									return (entry & (Rocinante::Memory::Paging::PteBits::kValid | Rocinante::Memory::Paging::PteBits::kPresent)) ==
+										(Rocinante::Memory::Paging::PteBits::kValid | Rocinante::Memory::Paging::PteBits::kPresent);
+								};
+								const auto EntryBase4K = [](std::uint64_t entry) {
+									return static_cast<std::uintptr_t>(entry & ~static_cast<std::uint64_t>(Rocinante::Memory::Paging::kPageOffsetMask));
+								};
+
+								if (dir3) {
+									const std::uint64_t e3 = dir3->entries[idx_dir3];
+									uart.puts("Paging bring-up: e3=");
+									uart.write(Rocinante::to_string(e3));
+									uart.putc('\n');
+									if (IsWalkable(e3)) {
+										auto* dir2 = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(EntryBase4K(e3));
+										const std::uint64_t e2 = dir2 ? dir2->entries[idx_dir2] : 0;
+										uart.puts("Paging bring-up: e2=");
+										uart.write(Rocinante::to_string(e2));
+										uart.putc('\n');
+										if (dir2 && IsWalkable(e2)) {
+											auto* dirl = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(EntryBase4K(e2));
+											const std::uint64_t e1 = dirl ? dirl->entries[idx_dirl] : 0;
+											uart.puts("Paging bring-up: e1=");
+											uart.write(Rocinante::to_string(e1));
+											uart.putc('\n');
+											if (dirl && IsWalkable(e1)) {
+												auto* pt = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(EntryBase4K(e1));
+												const std::uint64_t ep = pt ? pt->entries[idx_pt] : 0;
+												uart.puts("Paging bring-up: ep=");
+												uart.write(Rocinante::to_string(ep));
+												uart.putc('\n');
+											}
+										}
+									}
+								}
+							};
+							DumpPagingProbe(kernel_physical_base);
+							if (kernel_physical_end > kernel_physical_base) {
+								DumpPagingProbe(kernel_physical_end - 1);
+							}
+
+							// Configure the page-walk CSRs and switch into mapped address
+							// translation mode.
+							//
+							// Note:
+							// The current LoongArch spec version used by this project describes
+							// software-led TLB refill. We therefore enable paging even when the
+							// CPU reports that a hardware page-table walker is not present.
 							const bool enable_ptw = Rocinante::GetCPUCFG().SupportsPageTableWalker();
 							const auto config_or = Rocinante::Memory::PagingHw::Make4KiBPageWalkerConfig(address_bits);
 							if (!config_or.has_value()) {
@@ -535,16 +641,16 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 								uart.puts("Paging bring-up: configured PWCL/PWCH/PGD CSRs (CPUCFG.HPTW=");
 								uart.puts(enable_ptw ? "on" : "off");
 								uart.puts(")\n");
+								DumpMappedTranslationCsrs(uart);
 
-								#if defined(ROCINANTE_ENABLE_PAGING_NOW)
+								uart.puts("Paging bring-up: invalidating TLB (INVTLB op=0)\n");
+								Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
 								uart.puts("Paging bring-up: enabling paging (CRMD.PG=1, CRMD.DA=0)\n");
 								Rocinante::Memory::PagingHw::EnablePaging();
 								uart.puts("Paging bring-up: paging enabled\n");
-								#endif
 							}
 						}
 					}
-				}
 				}
 				#endif
 			} else {

@@ -107,9 +107,10 @@ static std::uint64_t PrivilegeLevelKernelBits() {
 static std::uint64_t LeafFlagsForPermissions(PagePermissions permissions) {
 	std::uint64_t flags = 0;
 
-	// For early bring-up we treat "present" and "valid" together.
-	flags |= PteBits::kPresent;
+	// V (Valid) indicates a valid translation exists.
 	flags |= PteBits::kValid;
+	// P (Physical page exists) is used during page walking.
+	flags |= PteBits::kPresent;
 	flags |= PrivilegeLevelKernelBits();
 	flags |= CacheBitsForMode(permissions.cache);
 
@@ -140,17 +141,16 @@ static std::uint64_t EncodeLeafEntry(std::uintptr_t physical_page_base, std::uin
 }
 
 static std::uint64_t EncodeTablePointer(std::uintptr_t physical_page_base, std::uint64_t physical_page_base_mask) {
-	// For now we encode intermediate pointers as "present + valid" plus the
-	// aligned physical base.
-	//
-	// Flaw / bring-up note:
-	// We still need to confirm whether LoongArch hardware expects intermediate
-	// entries to have the same flag semantics as leaf PTEs.
-	return (static_cast<std::uint64_t>(physical_page_base) & physical_page_base_mask) | PteBits::kPresent | PteBits::kValid;
+	// For non-leaf page-table entries that point to a next-level table, encode:
+	// - aligned physical base
+	// - V=1, P=1
+	// - bit 6 clear (not a huge-page entry)
+	return (static_cast<std::uint64_t>(physical_page_base) & physical_page_base_mask) | PteBits::kValid | PteBits::kPresent;
 }
 
 static bool EntryIsPresent(std::uint64_t entry) {
-	return (entry & PteBits::kPresent) != 0;
+	// Treat "present" as "walkable": require both the P and V fields.
+	return (entry & (PteBits::kPresent | PteBits::kValid)) == (PteBits::kPresent | PteBits::kValid);
 }
 
 static std::uintptr_t EntryPhysicalPageBase(std::uint64_t entry, std::uint64_t physical_page_base_mask) {
@@ -176,6 +176,9 @@ static bool EnsureNextLevelTable(
 
 	std::uint64_t entry = current_table->entries[index];
 	if (EntryIsPresent(entry)) {
+		// This software builder/walker does not support huge pages yet.
+		// In the privileged spec, bit 6 set in a directory entry indicates a huge-page entry.
+		if ((entry & PteBits::kGlobal) != 0) return false;
 		*out_next_table = PageTablePageFromPhysical(EntryPhysicalPageBase(entry, physical_page_base_mask));
 		return true;
 	}
@@ -395,6 +398,9 @@ bool UnmapPage4KiB(const PageTableRoot& root, std::uintptr_t virtual_address, Ad
 	for (std::size_t level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
 		const std::size_t index = IndexFromVirtualAddressAtLevel(virtual_address, level);
 		const std::uint64_t entry = table->entries[index];
+		// This software walker does not yet support huge pages. In the LoongArch
+		// privileged spec, bit 6 being set in a directory entry indicates a huge-page mapping.
+		if ((entry & PteBits::kGlobal) != 0) return false;
 		if (!EntryIsPresent(entry)) return false;
 		table = PageTablePageFromPhysical(EntryPhysicalPageBase(entry, layout.physical_page_base_mask));
 		if (!table) return false;
@@ -428,6 +434,9 @@ Rocinante::Optional<std::uintptr_t> Translate(const PageTableRoot& root, std::ui
 	for (std::size_t level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
 		const std::size_t index = IndexFromVirtualAddressAtLevel(virtual_address, level);
 		const std::uint64_t entry = table->entries[index];
+		// This software walker does not yet support huge pages. In the LoongArch
+		// privileged spec, bit 6 being set in a directory entry indicates a huge-page mapping.
+		if ((entry & PteBits::kGlobal) != 0) return {};
 		if (!EntryIsPresent(entry)) return {};
 		table = PageTablePageFromPhysicalConst(EntryPhysicalPageBase(entry, layout.physical_page_base_mask));
 		if (!table) return {};

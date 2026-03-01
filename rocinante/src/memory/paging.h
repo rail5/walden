@@ -50,9 +50,6 @@ static constexpr std::uint64_t kPageBaseMask = ~kPageOffsetMask;
  * Source of truth:
  * - LoongArch Privileged Architecture spec (page table entry format)
  *
- * Cross-check:
- * - Linux LoongArch pgtable bit positions match the spec for the fields we use.
- *
  * NOTE: this file intentionally keeps the set small. We only define the bits
  * we actively use in early bring-up.
  */
@@ -60,9 +57,9 @@ namespace PteBits {
 	// LoongArch page-table entry bit positions (LA64).
 	//
 	// Source of truth:
-	// - LoongArch-Vol1-EN.html, Section 5.4.5
-	//   Figure 8: "Table entry format for common pages" (4 KiB)
-	//   Figure 9: "Table entry format for huge pages"
+	// - LoongArch-Vol1-EN.html
+	//   - "Definition of TLB entry low order bits in LA64" (TLBELO0/TLBELO1)
+	//     This matches the per-page attribute layout used for common 4 KiB mappings.
 	//
 	// For early bring-up we only build common (4 KiB) page mappings. We still
 	// define the high-bit permission fields because they affect address masking.
@@ -74,7 +71,15 @@ namespace PteBits {
 	static constexpr std::uint64_t kPrivilegeLevelMask = (3ull << kPrivilegeLevelShift);
 	static constexpr std::uint64_t kCacheShift = 4;
 	static constexpr std::uint64_t kCacheMask = (3ull << kCacheShift);
+	// Bit 6 is G (Global) for leaf entries (common pages). For intermediate
+	// directory entries, the privileged spec uses bit 6 as the huge-page indicator.
 	static constexpr std::uint64_t kGlobal = (1ull << 6);
+	// The page-table entry format defined in the privileged spec includes fields
+	// used during page walking but not filled into TLB entries.
+	// - P: physical page exists
+	// - W: writable
+	// See LoongArch-Vol1-EN.html, "Table entry format for common pages" and the
+	// accompanying text describing the P and W fields.
 	static constexpr std::uint64_t kPresent = (1ull << 7);
 	static constexpr std::uint64_t kWrite = (1ull << 8);
 
