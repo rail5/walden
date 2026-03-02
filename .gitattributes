@@ -1,1 +1,9 @@
-spec/** filter=lfs diff=lfs merge=lfs -text
+spec/LoongArch-ELF-ABI-EN.html filter=lfs diff=lfs merge=lfs -text
+spec/LoongArch-Processor-SMBIOS-Spec-EN.html filter=lfs diff=lfs merge=lfs -text
+spec/LoongArch-toolchain-conventions-EN.html filter=lfs diff=lfs merge=lfs -text
+spec/LoongArch-Vol1-EN.html filter=lfs diff=lfs merge=lfs -text
+spec/Loongson-3A5000-usermanual-EN.html filter=lfs diff=lfs merge=lfs -text
+spec/Loongson-7A1000-usermanual-EN.html filter=lfs diff=lfs merge=lfs -text
+spec/extracted/page_table_walk_structure.png filter=lfs diff=lfs merge=lfs -text
+spec/extracted/pte_common_pages.png filter=lfs diff=lfs merge=lfs -text
+spec/extracted/pte_huge_pages.png filter=lfs diff=lfs merge=lfs -text
