@@ -67,7 +67,7 @@ Rocinante::Optional<PageWalkerConfig> Make4KiBPageWalkerConfig(Paging::AddressSp
 	//
 	// For 4 KiB pages, the page offset is 12 bits. The remaining (VALEN-12) bits
 	// are split across page-table indices from lowest to highest level.
-	if (address_bits.virtual_address_bits <= Paging::kPageShiftBits) return {};
+	if (address_bits.virtual_address_bits <= Paging::kPageShiftBits) return Rocinante::nullopt;
 
 	constexpr std::uint8_t kMaxIndexLevels = 5; // PT + Dirl + Dir2 + Dir3 + Dir4
 	std::uint8_t widths[kMaxIndexLevels]{};
@@ -75,7 +75,7 @@ Rocinante::Optional<PageWalkerConfig> Make4KiBPageWalkerConfig(Paging::AddressSp
 	std::uint32_t remaining = static_cast<std::uint32_t>(address_bits.virtual_address_bits) - Paging::kPageShiftBits;
 	while (remaining > 0) {
 		if (level_count >= kMaxIndexLevels) {
-			return {};
+			return Rocinante::nullopt;
 		}
 		const std::uint8_t w = (remaining >= Paging::kIndexBitsPerLevel)
 			? static_cast<std::uint8_t>(Paging::kIndexBitsPerLevel)

@@ -252,18 +252,18 @@ struct Layout final {
 };
 
 static Rocinante::Optional<Layout> BuildLayout(AddressSpaceBits address_bits) {
-	if (address_bits.virtual_address_bits == 0) return {};
-	if (address_bits.physical_address_bits == 0) return {};
-	if (address_bits.virtual_address_bits > 64) return {};
-	if (address_bits.physical_address_bits > 64) return {};
+	if (address_bits.virtual_address_bits == 0) return Rocinante::nullopt;
+	if (address_bits.physical_address_bits == 0) return Rocinante::nullopt;
+	if (address_bits.virtual_address_bits > 64) return Rocinante::nullopt;
+	if (address_bits.physical_address_bits > 64) return Rocinante::nullopt;
 
 	const std::uint8_t level_count = LevelCountFromVirtualAddressBits(address_bits.virtual_address_bits);
-	if (level_count == 0) return {};
+	if (level_count == 0) return Rocinante::nullopt;
 
 	const std::uint64_t virtual_address_low_mask = MaskFromBits(address_bits.virtual_address_bits);
 	const std::uint64_t physical_address_mask = MaskFromBits(address_bits.physical_address_bits);
 	const std::uint64_t physical_page_base_mask = PhysicalPageBaseMaskFromBits(address_bits.physical_address_bits);
-	if (physical_page_base_mask == 0) return {};
+	if (physical_page_base_mask == 0) return Rocinante::nullopt;
 
 	return Layout{
 		.virtual_address_bits = address_bits.virtual_address_bits,
@@ -304,12 +304,12 @@ static bool ValidatePhysicalAddress(std::uintptr_t physical_address, const Layou
 } // namespace
 
 Rocinante::Optional<PageTableRoot> AllocateRootPageTable(PhysicalMemoryManager* pmm) {
-	if (!pmm) return {};
+	if (!pmm) return Rocinante::nullopt;
 	const auto page = pmm->AllocatePage();
-	if (!page.has_value()) return {};
+	if (!page.has_value()) return Rocinante::nullopt;
 
 	const std::uintptr_t root_physical_base = page.value();
-	if (!IsPageAligned(root_physical_base)) return {};
+	if (!IsPageAligned(root_physical_base)) return Rocinante::nullopt;
 
 	auto* root = PageTablePageFromPhysical(root_physical_base);
 	(void)memset(root, 0, sizeof(PageTablePage));
@@ -468,30 +468,30 @@ Rocinante::Optional<std::uintptr_t> Translate(const PageTableRoot& root, std::ui
 
 Rocinante::Optional<std::uintptr_t> Translate(const PageTableRoot& root, std::uintptr_t virtual_address, AddressSpaceBits address_bits) {
 	const auto layout_opt = BuildLayout(address_bits);
-	if (!layout_opt.has_value()) return {};
+	if (!layout_opt.has_value()) return Rocinante::nullopt;
 	const Layout layout = layout_opt.value();
 
-	if (root.root_physical_address == 0) return {};
-	if (!ValidateVirtualAddress(virtual_address, layout)) return {};
+	if (root.root_physical_address == 0) return Rocinante::nullopt;
+	if (!ValidateVirtualAddress(virtual_address, layout)) return Rocinante::nullopt;
 
 	const auto* table = PageTablePageFromPhysicalConst(root.root_physical_address);
-	if (!table) return {};
+	if (!table) return Rocinante::nullopt;
 
 	for (std::size_t level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
 		const std::size_t index = IndexFromVirtualAddressAtLevel(virtual_address, level);
 		const std::uint64_t entry = table->entries[index];
 		// This software walker does not yet support huge pages. In the LoongArch
 		// privileged spec, bit 6 being set in a directory entry indicates a huge-page mapping.
-		if ((entry & PteBits::kGlobal) != 0) return {};
-		if (!EntryIsPresent(entry)) return {};
+		if ((entry & PteBits::kGlobal) != 0) return Rocinante::nullopt;
+		if (!EntryIsPresent(entry)) return Rocinante::nullopt;
 		table = PageTablePageFromPhysicalConst(EntryPhysicalPageBase(entry, layout.physical_page_base_mask));
-		if (!table) return {};
+		if (!table) return Rocinante::nullopt;
 	}
 
 	const std::size_t leaf_index = IndexFromVirtualAddressAtLevel(virtual_address, 0);
 	const std::uint64_t page_offset = static_cast<std::uint64_t>(virtual_address & kPageOffsetMask);
 	const std::uint64_t pte_entry = table->entries[leaf_index];
-	if (!EntryIsPresent(pte_entry)) return {};
+	if (!EntryIsPresent(pte_entry)) return Rocinante::nullopt;
 
 	const std::uintptr_t physical_page_base = EntryPhysicalPageBase(pte_entry, layout.physical_page_base_mask);
 	return physical_page_base + static_cast<std::uintptr_t>(page_offset);
