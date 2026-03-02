@@ -274,8 +274,10 @@ static void Test_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(TestCon
 	static constexpr std::uintptr_t kUsableBase = 0x00000000;
 	static constexpr std::size_t kUsableSizeBytes = 1024 * PhysicalMemoryManager::kPageSizeBytes; // 4 MiB
 
-	static constexpr std::uintptr_t kKernelBase = 0x00000000;
-	static constexpr std::uintptr_t kKernelEnd = 0x00100000; // 1 MiB
+	// Match the real linker placement in src/asm/linker.ld: the kernel is linked
+	// to start at 0x00200000 (2 MiB), leaving 0..1 MiB for QEMU boot info/DTB.
+	static constexpr std::uintptr_t kKernelBase = 0x00200000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00240000; // 256 KiB
 
 	static constexpr std::uintptr_t kDeviceTreeBase = 0x00100000;
 	static constexpr std::size_t kDeviceTreeSizeBytes = 0x00100000; // 1 MiB
@@ -288,9 +290,13 @@ static void Test_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(TestCon
 	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
 
 	// Usable pages: 1024.
-	// Reserved pages: kernel (256) + DTB (256) + bitmap storage (1 page for 1024 tracked pages).
+	// Reserved pages:
+	// - DTB: 1 MiB = 256 pages
+	// - Kernel: 256 KiB = 64 pages
+	// - PMM bitmap storage: for 1024 tracked pages => 128 bytes, which occupies 1 page once page-granular reserved
+	// - Zero page: explicitly reserved by PMM policy (since kernel is not at physical 0)
 	static constexpr std::size_t kExpectedTotalPages = 1024;
-	static constexpr std::size_t kExpectedFreePages = 1024 - 256 - 256 - 1;
+	static constexpr std::size_t kExpectedFreePages = 1024 - 256 - 64 - 1 - 1;
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.TotalPages(), kExpectedTotalPages);
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), kExpectedFreePages);
 }
