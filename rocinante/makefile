@@ -34,11 +34,17 @@ MEM_OBJDIR = $(BINDIR)/memory
 TEST_SRCDIR = $(SRCDIR)/testing
 TEST_OBJDIR = $(BINDIR)/testing
 
-KERNEL_SRC = $(SRCDIR)/kernel.cpp
-KERNEL_OBJ = $(BINDIR)/kernel.o
+PLATFORM_SRCDIR = $(SRCDIR)/platform
+PLATFORM_OBJDIR = $(BINDIR)/platform
 
-TRAP_SRC   = $(SRCDIR)/trap.cpp
-TRAP_OBJ   = $(BINDIR)/trap.o
+BOOT_SRCDIR = $(SRCDIR)/boot
+BOOT_OBJDIR = $(BINDIR)/boot
+
+KERNEL_SRCDIR = $(SRCDIR)/kernel
+KERNEL_OBJDIR = $(BINDIR)/kernel
+
+TRAP_SRCDIR = $(SRCDIR)/trap
+TRAP_OBJDIR = $(BINDIR)/trap
 
 # Minimal C++ ABI/runtime stubs
 ABI_SRC    = $(SRCDIR)/cxxabi.cpp
@@ -53,10 +59,22 @@ SP_OBJS    = $(patsubst $(SP_SRCDIR)/%.cpp, $(SP_OBJDIR)/%.o, $(SP_SRCS))
 MEM_SRCS   = $(wildcard $(MEM_SRCDIR)/*.cpp)
 MEM_OBJS   = $(patsubst $(MEM_SRCDIR)/%.cpp, $(MEM_OBJDIR)/%.o, $(MEM_SRCS))
 
+PLATFORM_SRCS = $(wildcard $(PLATFORM_SRCDIR)/*.cpp)
+PLATFORM_OBJS = $(patsubst $(PLATFORM_SRCDIR)/%.cpp, $(PLATFORM_OBJDIR)/%.o, $(PLATFORM_SRCS))
+
+BOOT_SRCS  = $(wildcard $(BOOT_SRCDIR)/*.cpp)
+BOOT_OBJS  = $(patsubst $(BOOT_SRCDIR)/%.cpp, $(BOOT_OBJDIR)/%.o, $(BOOT_SRCS))
+
+KERNEL_SRCS = $(wildcard $(KERNEL_SRCDIR)/*.cpp)
+KERNEL_OBJS = $(patsubst $(KERNEL_SRCDIR)/%.cpp, $(KERNEL_OBJDIR)/%.o, $(KERNEL_SRCS))
+
+TRAP_SRCS  = $(wildcard $(TRAP_SRCDIR)/*.cpp)
+TRAP_OBJS  = $(patsubst $(TRAP_SRCDIR)/%.cpp, $(TRAP_OBJDIR)/%.o, $(TRAP_SRCS))
+
 TEST_SRCS  = $(wildcard $(TEST_SRCDIR)/*.cpp)
 TEST_OBJS  = $(patsubst $(TEST_SRCDIR)/%.cpp, $(TEST_OBJDIR)/%.o, $(TEST_SRCS))
 
-ALL_OBJS   = $(ASM_OBJS) $(KERNEL_OBJ) $(TRAP_OBJ) $(ABI_OBJ) $(SP_OBJS) $(MEM_OBJS)
+ALL_OBJS   = $(ASM_OBJS) $(ABI_OBJ) $(SP_OBJS) $(MEM_OBJS) $(PLATFORM_OBJS) $(BOOT_OBJS) $(TRAP_OBJS) $(KERNEL_OBJS)
 
 LINKER_LD  = $(ASM_SRCDIR)/linker.ld
 
@@ -124,16 +142,24 @@ $(MEM_OBJDIR)/%.o: $(MEM_SRCDIR)/%.cpp $(FLAGS_STAMP)
 	@mkdir -p $(MEM_OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+$(PLATFORM_OBJDIR)/%.o: $(PLATFORM_SRCDIR)/%.cpp $(FLAGS_STAMP)
+	@mkdir -p $(PLATFORM_OBJDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(BOOT_OBJDIR)/%.o: $(BOOT_SRCDIR)/%.cpp $(FLAGS_STAMP)
+	@mkdir -p $(BOOT_OBJDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(TRAP_OBJDIR)/%.o: $(TRAP_SRCDIR)/%.cpp $(FLAGS_STAMP)
+	@mkdir -p $(TRAP_OBJDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
+$(KERNEL_OBJDIR)/%.o: $(KERNEL_SRCDIR)/%.cpp $(FLAGS_STAMP)
+	@mkdir -p $(KERNEL_OBJDIR)
+	$(CXX) $(CXXFLAGS) -c $< -o $@
+
 $(TEST_OBJDIR)/%.o: $(TEST_SRCDIR)/%.cpp $(FLAGS_STAMP)
 	@mkdir -p $(TEST_OBJDIR)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-$(KERNEL_OBJ): $(KERNEL_SRC) $(FLAGS_STAMP)
-	@mkdir -p $(BINDIR)
-	$(CXX) $(CXXFLAGS) -c $< -o $@
-
-$(TRAP_OBJ): $(TRAP_SRC) $(FLAGS_STAMP)
-	@mkdir -p $(BINDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(ABI_OBJ): $(ABI_SRC) $(FLAGS_STAMP)

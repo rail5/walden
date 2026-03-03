@@ -3,7 +3,7 @@
  * GPL-3.0-or-later
  */
 
-#include "trap.h"
+#include <src/trap/trap.h>
 
 #include <cstdint>
 
