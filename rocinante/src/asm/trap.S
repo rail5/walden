@@ -20,7 +20,7 @@
 //   proper trampoline that switches stacks before touching memory.
 //
 // NOTE: Every instruction and offset here is part of an ABI with TrapFrame.
-// Keep the layout in lock-step with src/trap.h.
+// Keep the layout in lock-step with src/trap/trap.h.
 
 .globl __exception_entry
 .type __exception_entry, @function
@@ -29,7 +29,7 @@
 .type __tlb_refill_entry, @function
 
 // -----------------------------------------------------------------------------
-// TrapFrame layout (must match Rocinante::TrapFrame in src/trap.h)
+// TrapFrame layout (must match Rocinante::TrapFrame in src/trap/trap.h)
 // -----------------------------------------------------------------------------
 // TrapFrame::general_purpose_registers[32] (32 * 8 = 256 bytes)
 .equ TF_GENERAL_PURPOSE_REGISTERS, 0

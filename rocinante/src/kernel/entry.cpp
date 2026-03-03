@@ -15,7 +15,7 @@
 #include <src/sp/cpucfg.h>
 #include <src/sp/uart16550.h>
 #include <src/testing/test.h>
-#include <src/trap.h>
+#include <src/trap/trap.h>
 
 #include <cstdint>
 

@@ -9,7 +9,7 @@
 #include <cstdint>
 
 #include <src/sp/cpucfg.h>
-#include <src/trap.h>
+#include <src/trap/trap.h>
 
 #include <src/memory/boot_memory_map.h>
 #include <src/memory/pmm.h>

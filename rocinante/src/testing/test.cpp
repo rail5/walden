@@ -7,7 +7,7 @@
 
 #include <cstddef>
 #include <src/sp/uart16550.h>
-#include <src/trap.h>
+#include <src/trap/trap.h>
 
 namespace Rocinante::Testing {
 
