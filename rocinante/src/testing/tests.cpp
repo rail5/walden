@@ -261,6 +261,171 @@ static void Test_PMM_RespectsReservedKernelAndDTB(TestContext* ctx) {
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), 0);
 }
 
+static void Test_PMM_DoesNotClobberReservedDuringBitmapPlacement(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+
+	// Regression guard:
+	// The PMM bitmap is carved out of a UsableRAM region. If bitmap placement
+	// does not respect DTB-reserved regions, initialization can silently overwrite
+	// reserved physical memory.
+	//
+	// Construct a synthetic map where the first page of UsableRAM is Reserved.
+	// If the bitmap placement code incorrectly selects the start of the UsableRAM
+	// region, it will overwrite our poison pattern.
+	static constexpr std::uintptr_t kUsableBase = 0x00100000;
+	static constexpr std::size_t kUsableSizeBytes = 64 * PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uintptr_t kReservedBase = kUsableBase;
+	static constexpr std::size_t kReservedSizeBytes = 1 * PhysicalMemoryManager::kPageSizeBytes;
+
+	// Keep kernel/DTB outside the usable region so bitmap placement is not bumped
+	// for unrelated reasons.
+	static constexpr std::uintptr_t kKernelBase = 0x00400000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00401000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00500000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uint8_t kPoison = 0x5A;
+	volatile std::uint8_t* reserved = reinterpret_cast<volatile std::uint8_t*>(kReservedBase);
+	for (std::size_t i = 0; i < kReservedSizeBytes; i++) {
+		reserved[i] = kPoison;
+	}
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kReservedBase, .size_bytes = kReservedSizeBytes, .type = BootMemoryRegion::Type::Reserved}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	for (std::size_t i = 0; i < kReservedSizeBytes; i++) {
+		ROCINANTE_EXPECT_EQ_U64(ctx, static_cast<std::uint64_t>(reserved[i]), static_cast<std::uint64_t>(kPoison));
+	}
+}
+
+static std::uint32_t CPUCFG_ReadViaInstruction(void*, std::uint32_t word_number) {
+	std::uint32_t value = 0;
+	asm volatile(
+		"cpucfg %0, %1"
+		: "=r"(value)
+		: "r"(word_number)
+	);
+	return value;
+}
+
+struct FakeCPUCFGBackendForPMM final {
+	std::uint32_t word1 = 0;
+
+	static std::uint32_t Read(void* context, std::uint32_t word_number) {
+		auto* self = static_cast<FakeCPUCFGBackendForPMM*>(context);
+		if (word_number == 0x1) return self->word1;
+		return 0;
+	}
+};
+
+static void Test_PMM_ClampsTrackedRangeToPALEN(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+
+	// Regression guard:
+	// The PMM should never track/allocate physical pages beyond the CPU's
+	// architecturally-supported physical address width (PALEN).
+	//
+	// We inject a small PALEN so the clamp is observable in a tiny synthetic map.
+	// Pick PALEN=20 => physical address space is 2^20 bytes = 1 MiB.
+	static constexpr std::uint32_t kPALEN = 20;
+
+	// Encode CPUCFG word 0x1 fields needed by PhysicalAddressBits().
+	// - ARCH[1:0] = 2 (LA64)
+	// - PALEN[11:4] = PALEN-1
+	static constexpr std::uint32_t kArchLA64 = 2;
+	static constexpr std::uint32_t kArchShift = 0;
+	static constexpr std::uint32_t kPALENMinus1Shift = 4;
+	static constexpr std::uint32_t kWord1 =
+		(kArchLA64 << kArchShift) |
+		((kPALEN - 1u) << kPALENMinus1Shift);
+
+	FakeCPUCFGBackendForPMM fake;
+	fake.word1 = kWord1;
+
+	auto& cpucfg = Rocinante::GetCPUCFG();
+	cpucfg.SetBackend(Rocinante::CPUCFGBackend{.context = &fake, .read_word = &FakeCPUCFGBackendForPMM::Read});
+
+	BootMemoryMap map;
+	map.Clear();
+
+	// Report 4 MiB of UsableRAM starting at 0.
+	static constexpr std::uintptr_t kUsableBase = 0x00000000;
+	static constexpr std::size_t kUsableSizeBytes = 4 * 1024 * 1024;
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, 0, 0, 0, 0));
+
+	// With PALEN=20, the PMM must clamp tracking to [0, 1MiB): 256 pages.
+	static constexpr std::size_t kExpectedTotalPages = (1 * 1024 * 1024) / PhysicalMemoryManager::kPageSizeBytes;
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.TotalPages(), kExpectedTotalPages);
+
+	// Free pages: total minus bitmap-storage page (always at least 1 page) minus
+	// the zero page reservation.
+	static constexpr std::size_t kExpectedFreePages = kExpectedTotalPages - 1 - 1;
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), kExpectedFreePages);
+
+	// Restore CPUCFG backend to the real instruction path for subsequent tests.
+	cpucfg.SetBackend(Rocinante::CPUCFGBackend{.context = nullptr, .read_word = &CPUCFG_ReadViaInstruction});
+	// Ensure future accesses see real CPU values.
+	cpucfg.ResetCache();
+}
+
+static void Test_PMM_BitmapPlacement_RespectsPALEN(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+
+	// Regression guard:
+	// Even if the boot map reports a UsableRAM region above 2^PALEN, the PMM must
+	// not place its bitmap metadata there.
+	static constexpr std::uint32_t kPALEN = 20; // 1 MiB physical address space.
+
+	static constexpr std::uint32_t kArchLA64 = 2;
+	static constexpr std::uint32_t kWord1 = (kArchLA64 << 0) | ((kPALEN - 1u) << 4);
+
+	FakeCPUCFGBackendForPMM fake;
+	fake.word1 = kWord1;
+
+	auto& cpucfg = Rocinante::GetCPUCFG();
+	cpucfg.SetBackend(Rocinante::CPUCFGBackend{.context = &fake, .read_word = &FakeCPUCFGBackendForPMM::Read});
+
+	BootMemoryMap map;
+	map.Clear();
+
+	// Two UsableRAM regions:
+	// - First is entirely above max physical range (>= 2 MiB).
+	// - Second is within [0, 1 MiB).
+	static constexpr std::uintptr_t kOutOfRangeUsableBase = 0x00200000;
+	static constexpr std::size_t kOutOfRangeUsableSizeBytes = 0x00100000;
+	static constexpr std::uintptr_t kInRangeUsableBase = 0x00000000;
+	static constexpr std::size_t kInRangeUsableSizeBytes = 0x00100000;
+
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kOutOfRangeUsableBase, .size_bytes = kOutOfRangeUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kInRangeUsableBase, .size_bytes = kInRangeUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, 0, 0, 0, 0));
+
+	// With PALEN=20, tracked range must still be exactly 1 MiB.
+	static constexpr std::size_t kExpectedTotalPages = (1 * 1024 * 1024) / PhysicalMemoryManager::kPageSizeBytes;
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.TotalPages(), kExpectedTotalPages);
+
+	// Restore CPUCFG backend.
+	cpucfg.SetBackend(Rocinante::CPUCFGBackend{.context = nullptr, .read_word = &CPUCFG_ReadViaInstruction});
+	cpucfg.ResetCache();
+}
+
 static void Test_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(TestContext* ctx) {
 	using Rocinante::Memory::BootMemoryRegion;
 	using Rocinante::Memory::BootMemoryMap;
@@ -439,6 +604,149 @@ static void Test_Paging_RespectsVALENAndPALEN(TestContext* ctx) {
 	// PA out of range for PALEN=44.
 	const std::uintptr_t bad_physical = physical_page_base | (1ull << 44);
 	ROCINANTE_EXPECT_TRUE(ctx, !MapPage4KiB(&pmm, root.value(), kGoodVirtualLow + PhysicalMemoryManager::kPageSizeBytes, bad_physical, permissions, bits));
+}
+
+static void Test_Paging_Physmap_MapsRootPageTableAndAttributes(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapRange4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::PageTablePage;
+	using Rocinante::Memory::Paging::PageTableRoot;
+	using Rocinante::Memory::Paging::Translate;
+	namespace PteBits = Rocinante::Memory::Paging::PteBits;
+
+	// Regression guard for paging bring-up:
+	// The paging builder/walker must be able to access page-table pages via the
+	// physmap once paging is enabled.
+
+	auto& cpucfg = Rocinante::GetCPUCFG();
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = static_cast<std::uint8_t>(cpucfg.VirtualAddressBits()),
+		.physical_address_bits = static_cast<std::uint8_t>(cpucfg.PhysicalAddressBits()),
+	};
+
+	// Keep the pool away from the kernel/DTB low region.
+	static constexpr std::uintptr_t kUsableBase = 0x01000000; // 16 MiB
+	static constexpr std::size_t kUsableSizeBytes = 32u * 1024u * 1024u; // 32 MiB
+
+	const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+	const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+	ROCINANTE_EXPECT_TRUE(ctx, kernel_physical_end > kernel_physical_base);
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{
+		.physical_base = kUsableBase,
+		.size_bytes = kUsableSizeBytes,
+		.type = BootMemoryRegion::Type::UsableRAM,
+	}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(
+		map,
+		kernel_physical_base,
+		kernel_physical_end,
+		0,
+		0));
+
+	const auto root_or = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root_or.has_value());
+	if (!root_or.has_value()) return;
+	const PageTableRoot root = root_or.value();
+
+	const std::uintptr_t physmap_virtual_base =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(kUsableBase, address_bits.virtual_address_bits);
+
+	const PagePermissions physmap_permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	ROCINANTE_EXPECT_TRUE(ctx, MapRange4KiB(
+		&pmm,
+		root,
+		physmap_virtual_base,
+		kUsableBase,
+		kUsableSizeBytes,
+		physmap_permissions,
+		address_bits));
+
+	// The root page-table page must be allocated from the PMM pool.
+	ROCINANTE_EXPECT_TRUE(ctx, root.root_physical_address >= kUsableBase);
+	ROCINANTE_EXPECT_TRUE(ctx, root.root_physical_address < (kUsableBase + kUsableSizeBytes));
+
+	const std::uintptr_t physmap_root_virtual =
+		physmap_virtual_base + (root.root_physical_address - kUsableBase);
+
+	const auto translated = Translate(root, physmap_root_virtual, address_bits);
+	ROCINANTE_EXPECT_TRUE(ctx, translated.has_value());
+	if (translated.has_value()) {
+		ROCINANTE_EXPECT_EQ_U64(ctx, translated.value(), root.root_physical_address);
+	}
+
+	// Read the physmap leaf PTE and validate cache + NX.
+	const auto ReadLeafPteEntry_Assuming4Level4KiB =
+		[&](std::uintptr_t probe_va) -> Rocinante::Optional<std::uint64_t> {
+			constexpr std::size_t kIndexMask =
+				(1u << Rocinante::Memory::Paging::kIndexBitsPerLevel) - 1u;
+			constexpr std::size_t kShiftPt = Rocinante::Memory::Paging::kPageShiftBits;
+			constexpr std::size_t kShiftDirl = kShiftPt + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+			constexpr std::size_t kShiftDir2 = kShiftDirl + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+			constexpr std::size_t kShiftDir3 = kShiftDir2 + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+
+			const std::size_t idx_dir3 = static_cast<std::size_t>((probe_va >> kShiftDir3) & kIndexMask);
+			const std::size_t idx_dir2 = static_cast<std::size_t>((probe_va >> kShiftDir2) & kIndexMask);
+			const std::size_t idx_dirl = static_cast<std::size_t>((probe_va >> kShiftDirl) & kIndexMask);
+			const std::size_t idx_pt = static_cast<std::size_t>((probe_va >> kShiftPt) & kIndexMask);
+
+			auto* dir3 = reinterpret_cast<PageTablePage*>(root.root_physical_address);
+			if (!dir3) return Rocinante::nullopt;
+
+			const auto EntryIsWalkable = [](std::uint64_t entry) {
+				return (entry & (PteBits::kValid | PteBits::kPresent)) == (PteBits::kValid | PteBits::kPresent);
+			};
+			const auto EntryBase4K = [](std::uint64_t entry) {
+				return static_cast<std::uintptr_t>(
+					entry & ~static_cast<std::uint64_t>(Rocinante::Memory::Paging::kPageOffsetMask)
+				);
+			};
+
+			const std::uint64_t e3 = dir3->entries[idx_dir3];
+			if (!EntryIsWalkable(e3)) return Rocinante::nullopt;
+			auto* dir2 = reinterpret_cast<PageTablePage*>(EntryBase4K(e3));
+			if (!dir2) return Rocinante::nullopt;
+
+			const std::uint64_t e2 = dir2->entries[idx_dir2];
+			if (!EntryIsWalkable(e2)) return Rocinante::nullopt;
+			auto* dirl = reinterpret_cast<PageTablePage*>(EntryBase4K(e2));
+			if (!dirl) return Rocinante::nullopt;
+
+			const std::uint64_t e1 = dirl->entries[idx_dirl];
+			if (!EntryIsWalkable(e1)) return Rocinante::nullopt;
+			auto* pt = reinterpret_cast<PageTablePage*>(EntryBase4K(e1));
+			if (!pt) return Rocinante::nullopt;
+
+			return Rocinante::Optional<std::uint64_t>(pt->entries[idx_pt]);
+		};
+
+	const auto pte_or = ReadLeafPteEntry_Assuming4Level4KiB(physmap_root_virtual);
+	ROCINANTE_EXPECT_TRUE(ctx, pte_or.has_value());
+	if (!pte_or.has_value()) return;
+	const std::uint64_t pte = pte_or.value();
+
+	const std::uint64_t cache_field = (pte & PteBits::kCacheMask) >> PteBits::kCacheShift;
+	const bool nx = (pte & PteBits::kNoExecute) != 0;
+	ROCINANTE_EXPECT_TRUE(ctx, nx);
+	ROCINANTE_EXPECT_EQ_U64(ctx, cache_field, static_cast<std::uint64_t>(CacheMode::CoherentCached));
 }
 
 static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
@@ -920,7 +1228,11 @@ extern const TestCase g_test_cases[] = {
 	{"Interrupts.TimerIRQ.DeliversAndClears", &Test_Interrupts_TimerIRQ_DeliversAndClears},
 	{"Memory.Paging.MapTranslateUnmap", &Test_Paging_MapTranslateUnmap},
 	{"Memory.Paging.RespectsVALENAndPALEN", &Test_Paging_RespectsVALENAndPALEN},
+	{"Memory.Paging.Physmap.MapsRootAndAttributes", &Test_Paging_Physmap_MapsRootPageTableAndAttributes},
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &Test_PMM_RespectsReservedKernelAndDTB},
+	{"Memory.PMM.BitmapPlacement.DoesNotClobberReserved", &Test_PMM_DoesNotClobberReservedDuringBitmapPlacement},
+	{"Memory.PMM.ClampsTrackedRangeToPALEN", &Test_PMM_ClampsTrackedRangeToPALEN},
+	{"Memory.PMM.BitmapPlacement.RespectsPALEN", &Test_PMM_BitmapPlacement_RespectsPALEN},
 	{"Memory.PMM.Initialize.SingleUsableRegionContainingKernelAndDTB", &Test_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB},
 	{"Memory.PagingHw.EnablePaging.TlbRefillSmoke", &Test_PagingHw_EnablePaging_TlbRefillSmoke},
 	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV},

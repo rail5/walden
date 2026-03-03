@@ -6,6 +6,20 @@ PROJECT_ROOT_DIRECTORY = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))
 SRCDIR     = src
 BINDIR     = bin
 
+# Build configuration stamp.
+#
+# Problem:
+# This project uses build-time feature flags (e.g. ROCINANTE_TESTS,
+# ROCINANTE_PAGING_BRINGUP). If you switch targets without cleaning,
+# Make may incorrectly reuse object files built with a different set of
+# preprocessor definitions, leading to link errors or (worse) subtly wrong
+# kernels.
+#
+# Policy:
+# Any change to the effective compiler/linker flags must trigger a rebuild of
+# all objects.
+FLAGS_STAMP = $(BINDIR)/.build-flags
+
 TARGET     = $(BINDIR)/rocinante.elf
 
 ASM_SRCDIR = $(SRCDIR)/asm
@@ -52,7 +66,7 @@ TARGET_TRIPLE ?= loongarch64-linux-gnu
 CC             = clang
 CXX            = clang++
 LD             = $(CXX)
-CFLAGS         = --target=$(TARGET_TRIPLE) -ffreestanding -nostdlib -fno-asynchronous-unwind-tables -fno-pic -mno-lsx -mno-lasx -fno-vectorize -fno-slp-vectorize -Wall -Wextra -O2 -I$(PROJECT_ROOT_DIRECTORY)
+CFLAGS         = --target=$(TARGET_TRIPLE) -ffreestanding -nostdlib -fno-asynchronous-unwind-tables -fno-pic -fno-jump-tables -mno-lsx -mno-lasx -fno-vectorize -fno-slp-vectorize -Wall -Wextra -O2 -I$(PROJECT_ROOT_DIRECTORY)
 CXXFLAGS       = $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++23
 LDFLAGS        = --target=$(TARGET_TRIPLE) -fuse-ld=lld -nostdlib -static -Wl,-no-pie -Wl,-T,$(LINKER_LD) -Wl,-s
 
@@ -61,12 +75,27 @@ ifeq ($(ROCINANTE_PAGING_BRINGUP),1)
 	CXXFLAGS += -DROCINANTE_PAGING_BRINGUP
 endif
 
+ifeq ($(ROCINANTE_PAGING_IDENTITY_TEARDOWN_EXPERIMENT),1)
+	CFLAGS += -DROCINANTE_PAGING_IDENTITY_TEARDOWN_EXPERIMENT
+	CXXFLAGS += -DROCINANTE_PAGING_IDENTITY_TEARDOWN_EXPERIMENT
+endif
+
 ifeq ($(ROCINANTE_TESTS),1)
 	CXXFLAGS += -DROCINANTE_TESTS
 	ALL_OBJS += $(TEST_OBJS)
 endif
 
 all: $(TARGET)
+
+$(FLAGS_STAMP):
+	@mkdir -p $(BINDIR)
+	@tmpfile=$$(mktemp); \
+	printf '%s\n' "CFLAGS=$(CFLAGS)" "CXXFLAGS=$(CXXFLAGS)" "LDFLAGS=$(LDFLAGS)" > "$$tmpfile"; \
+	if [ ! -f "$@" ] || ! cmp -s "$$tmpfile" "$@"; then \
+		mv "$$tmpfile" "$@"; \
+	else \
+		rm "$$tmpfile"; \
+	fi
 
 check-toolchain:
 	@command -v $(CC) >/dev/null 2>&1 || (\
@@ -80,34 +109,34 @@ check-toolchain:
 		echo "Install LLVM lld and re-run make."; \
 		exit 1)
 
-$(TARGET): check-toolchain $(ALL_OBJS)
+$(TARGET): check-toolchain $(FLAGS_STAMP) $(ALL_OBJS)
 	$(LD) $(LDFLAGS) -o $@ $(ALL_OBJS)
 
-$(ASM_OBJDIR)/%.o: $(ASM_SRCDIR)/%.S
+$(ASM_OBJDIR)/%.o: $(ASM_SRCDIR)/%.S $(FLAGS_STAMP)
 	@mkdir -p $(ASM_OBJDIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(SP_OBJDIR)/%.o: $(SP_SRCDIR)/%.cpp
+$(SP_OBJDIR)/%.o: $(SP_SRCDIR)/%.cpp $(FLAGS_STAMP)
 	@mkdir -p $(SP_OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(MEM_OBJDIR)/%.o: $(MEM_SRCDIR)/%.cpp
+$(MEM_OBJDIR)/%.o: $(MEM_SRCDIR)/%.cpp $(FLAGS_STAMP)
 	@mkdir -p $(MEM_OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(TEST_OBJDIR)/%.o: $(TEST_SRCDIR)/%.cpp
+$(TEST_OBJDIR)/%.o: $(TEST_SRCDIR)/%.cpp $(FLAGS_STAMP)
 	@mkdir -p $(TEST_OBJDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(KERNEL_OBJ): $(KERNEL_SRC)
+$(KERNEL_OBJ): $(KERNEL_SRC) $(FLAGS_STAMP)
 	@mkdir -p $(BINDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(TRAP_OBJ): $(TRAP_SRC)
+$(TRAP_OBJ): $(TRAP_SRC) $(FLAGS_STAMP)
 	@mkdir -p $(BINDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$(ABI_OBJ): $(ABI_SRC)
+$(ABI_OBJ): $(ABI_SRC) $(FLAGS_STAMP)
 	@mkdir -p $(BINDIR)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
@@ -127,8 +156,46 @@ run-serial: $(TARGET)
 
 test:
 	@$(MAKE) -C $(PROJECT_ROOT_DIRECTORY) ROCINANTE_TESTS=1 MAKEFLAGS= clean all
-	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
-		-nographic -serial stdio -monitor none \
-		-kernel $(PROJECT_ROOT_DIRECTORY)/$(TARGET)
+	@$(MAKE) -C $(PROJECT_ROOT_DIRECTORY) ROCINANTE_TESTS=1 MAKEFLAGS= run-serial
 
-.PHONY: all check-toolchain clean run run-serial test run-tests
+# Audit for absolute-address pointer tables.
+#
+# Context:
+# During paging bring-up we intentionally run the kernel via a higher-half alias,
+# and we can tear down the low identity mapping. Any data structure containing
+# link-time absolute addresses (e.g. jump tables, vtables, string-pointer tables)
+# can reintroduce unmapped low addresses and fault.
+#
+# Spec anchor:
+# LoongArch-ELF-ABI-EN.html, Relocations table:
+#   R_LARCH_32 / R_LARCH_64: *(int{32,64}_t*)PC = RtAddr + A
+# These relocations are the mechanism by which absolute addresses can be written
+# into object-file data.
+audit-abs-ptrs:
+	@command -v llvm-objdump >/dev/null 2>&1 || (\
+		echo "ERROR: Missing 'llvm-objdump' (needed for audit-abs-ptrs)"; \
+		exit 1)
+	@command -v llvm-nm >/dev/null 2>&1 || (\
+		echo "ERROR: Missing 'llvm-nm' (needed for audit-abs-ptrs)"; \
+		exit 1)
+	@fail=0; \
+	for f in $(ALL_OBJS); do \
+		if llvm-objdump -r "$$f" | grep -q "RELOCATION RECORDS FOR \[\.rodata"; then \
+			echo "ERROR: $$f has relocations in .rodata (likely pointer table)"; \
+			fail=1; \
+		fi; \
+		if llvm-objdump -r "$$f" | grep -q "RELOCATION RECORDS FOR \[\.data\.rel\.ro"; then \
+			echo "ERROR: $$f has relocations in .data.rel.ro (likely vtable/typeinfo)"; \
+			fail=1; \
+		fi; \
+		if llvm-nm --demangle "$$f" | grep -qE "vtable for|typeinfo for"; then \
+			echo "ERROR: $$f defines vtable/typeinfo symbols"; \
+			fail=1; \
+		fi; \
+	done; \
+	if [ $$fail -eq 0 ]; then \
+		echo "audit-abs-ptrs: OK"; \
+	fi; \
+	exit $$fail
+
+.PHONY: all check-toolchain clean run run-serial test run-tests audit-abs-ptrs

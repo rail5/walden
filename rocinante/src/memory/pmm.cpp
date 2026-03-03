@@ -121,6 +121,17 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 ) {
 	if (page_count == 0) return false;
 
+	// Clamp bitmap placement to the architecturally supported physical address
+	// width.
+	//
+	// Spec anchor (LoongArch-Vol1-EN.html): CPUCFG.1.PALEN encodes the supported
+	// physical address bits (PALEN). The CPU can only address the physical byte
+	// range [0, 2^PALEN).
+	const std::uint32_t palen_bits = Rocinante::GetCPUCFG().PhysicalAddressBits();
+	const bool palen_valid = (palen_bits != 0) && (palen_bits < 64);
+	const std::uintptr_t max_physical_exclusive =
+		palen_valid ? static_cast<std::uintptr_t>(1ull << palen_bits) : 0;
+
 	// Bitmap encoding:
 	// - 1 bit per tracked physical page.
 	// - bit = 1 means "used / not allocatable".
@@ -144,7 +155,12 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 		if (AddOverflows(static_cast<std::uintptr_t>(r.physical_base), static_cast<std::size_t>(r.size_bytes))) continue;
 
 		const std::uintptr_t region_begin = static_cast<std::uintptr_t>(r.physical_base);
-		const std::uintptr_t region_end = region_begin + static_cast<std::uintptr_t>(r.size_bytes);
+		std::uintptr_t region_end = region_begin + static_cast<std::uintptr_t>(r.size_bytes);
+		if (palen_valid) {
+			if (region_begin >= max_physical_exclusive) continue;
+			if (region_end > max_physical_exclusive) region_end = max_physical_exclusive;
+			if (region_end <= region_begin) continue;
+		}
 
 		// Never place metadata into the zero page.
 		std::uintptr_t candidate = region_begin;
@@ -160,12 +176,15 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 			if (AddOverflows(candidate, bitmap_alloc_size_bytes)) break;
 			const std::uintptr_t candidate_end = candidate + static_cast<std::uintptr_t>(bitmap_alloc_size_bytes);
 			if (candidate_end > region_end) break;
+			if (palen_valid && candidate_end > max_physical_exclusive) break;
 
 			bool bumped = false;
 			if (kernel_physical_end > kernel_physical_base) {
 				const std::size_t kernel_size = static_cast<std::size_t>(kernel_physical_end - kernel_physical_base);
 				if (RangesOverlap(candidate, bitmap_alloc_size_bytes, kernel_physical_base, kernel_size)) {
-					candidate = AlignUp(kernel_physical_end, kPageSizeBytes);
+					std::uintptr_t bump_end = kernel_physical_end;
+					if (palen_valid && bump_end > max_physical_exclusive) bump_end = max_physical_exclusive;
+					candidate = AlignUp(bump_end, kPageSizeBytes);
 					bumped = true;
 				}
 			}
@@ -174,8 +193,36 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 				if (RangesOverlap(candidate, bitmap_alloc_size_bytes, device_tree_physical_base, device_tree_size_bytes)) {
 					if (AddOverflows(device_tree_physical_base, device_tree_size_bytes)) break;
 					const std::uintptr_t dtb_end = device_tree_physical_base + static_cast<std::uintptr_t>(device_tree_size_bytes);
-					candidate = AlignUp(dtb_end, kPageSizeBytes);
+					std::uintptr_t bump_end = dtb_end;
+					if (palen_valid && bump_end > max_physical_exclusive) bump_end = max_physical_exclusive;
+					candidate = AlignUp(bump_end, kPageSizeBytes);
 					bumped = true;
+				}
+			}
+
+			if (!bumped) {
+				// Respect all DTB-reported Reserved regions.
+				//
+				// Policy:
+				// - BootMemoryRegion::Type::Reserved always wins over UsableRAM.
+				// - The PMM must not place its own metadata into any reserved region.
+				for (std::size_t ri = 0; ri < boot_map.region_count; ri++) {
+					const auto& rr = boot_map.regions[ri];
+					if (rr.type != BootMemoryRegion::Type::Reserved) continue;
+					if (rr.size_bytes == 0) continue;
+					if (AddOverflows(static_cast<std::uintptr_t>(rr.physical_base), static_cast<std::size_t>(rr.size_bytes))) continue;
+
+					const std::uintptr_t reserved_begin = static_cast<std::uintptr_t>(rr.physical_base);
+					const std::uintptr_t reserved_end = reserved_begin + static_cast<std::uintptr_t>(rr.size_bytes);
+					const std::size_t reserved_size = static_cast<std::size_t>(reserved_end - reserved_begin);
+
+					if (RangesOverlap(candidate, bitmap_alloc_size_bytes, reserved_begin, reserved_size)) {
+						std::uintptr_t bump_end = reserved_end;
+						if (palen_valid && bump_end > max_physical_exclusive) bump_end = max_physical_exclusive;
+						candidate = AlignUp(bump_end, kPageSizeBytes);
+						bumped = true;
+						break;
+					}
 				}
 			}
 
@@ -328,6 +375,21 @@ bool PhysicalMemoryManager::InitializeFromBootMemoryMap(
 	}
 
 	if (!saw_usable) return false;
+
+	// Clamp the tracked physical span to the architecturally supported physical
+	// address width.
+	//
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - CPUCFG.1.PALEN[11:4] encodes "PALEN minus 1"
+	// - PhysicalAddressBits() reports PALEN (bits), so the addressable physical
+	//   byte range is [0, 2^PALEN).
+	const std::uint32_t palen_bits = Rocinante::GetCPUCFG().PhysicalAddressBits();
+	if (palen_bits != 0 && palen_bits < (8u * static_cast<std::uint32_t>(sizeof(std::uintptr_t)))) {
+		const std::uintptr_t max_physical_exclusive = static_cast<std::uintptr_t>(1ull) << palen_bits;
+		if (usable_min >= max_physical_exclusive) return false;
+		if (usable_max > max_physical_exclusive) usable_max = max_physical_exclusive;
+		if (usable_max <= usable_min) return false;
+	}
 
 	m_tracked_physical_base = AlignDown(usable_min, kPageSizeBytes);
 	m_tracked_physical_limit = AlignUp(usable_max, kPageSizeBytes);

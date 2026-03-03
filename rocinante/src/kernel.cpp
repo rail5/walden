@@ -21,6 +21,7 @@
 namespace {
 
 extern "C" char _start;
+extern "C" char _end;
 extern "C" void __exception_entry();
 
 constexpr std::uintptr_t UART_BASE = 0x1fe001e0UL; // QEMU LoongArch virt: VIRT_UART_BASE address
@@ -69,7 +70,7 @@ static inline std::uint64_t ReadCsr() {
 	return value;
 }
 
-static const char* ExceptionCodeToString(std::uint64_t exception_code, std::uint64_t exception_subcode) {
+[[maybe_unused]] static const char* ExceptionCodeToString(std::uint64_t exception_code, std::uint64_t exception_subcode) {
 	// Table 21 "Table of exception encoding" (LoongArch Privileged Architecture).
 	switch (exception_code) {
 		case 0x0: return "INT";
@@ -230,6 +231,63 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	halt();
 }
 
+static void PrintCpuArchitecture(const Rocinante::Uart16550& uart, Rocinante::CPUCFG::Architecture arch) {
+	uart.puts("CPU Architecture: ");
+	if (arch == Rocinante::CPUCFG::Architecture::SimplifiedLA32) {
+		uart.putc('S');
+		uart.putc('i');
+		uart.putc('m');
+		uart.putc('p');
+		uart.putc('l');
+		uart.putc('i');
+		uart.putc('f');
+		uart.putc('i');
+		uart.putc('e');
+		uart.putc('d');
+		uart.putc(' ');
+		uart.putc('L');
+		uart.putc('A');
+		uart.putc('3');
+		uart.putc('2');
+		uart.putc('\n');
+		return;
+	}
+	if (arch == Rocinante::CPUCFG::Architecture::LA32) {
+		uart.putc('L');
+		uart.putc('A');
+		uart.putc('3');
+		uart.putc('2');
+		uart.putc('\n');
+		return;
+	}
+	if (arch == Rocinante::CPUCFG::Architecture::LA64) {
+		uart.putc('L');
+		uart.putc('A');
+		uart.putc('6');
+		uart.putc('4');
+		uart.putc('\n');
+		return;
+	}
+
+	uart.putc('R');
+	uart.putc('e');
+	uart.putc('s');
+	uart.putc('e');
+	uart.putc('r');
+	uart.putc('v');
+	uart.putc('e');
+	uart.putc('d');
+	uart.putc('/');
+	uart.putc('U');
+	uart.putc('n');
+	uart.putc('k');
+	uart.putc('n');
+	uart.putc('o');
+	uart.putc('w');
+	uart.putc('n');
+	uart.putc('\n');
+}
+
 [[noreturn]] [[maybe_unused]] [[gnu::noinline]] static void PagingBringup_HigherHalfStackContinuation() {
 	// This function is entered via an assembly jump after paging is enabled.
 	// It is the first C++ code we intentionally run with a higher-half stack.
@@ -368,6 +426,84 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 			uart.puts("<none>");
 		}
 		uart.putc('\n');
+
+		#if defined(ROCINANTE_PAGING_IDENTITY_TEARDOWN_EXPERIMENT)
+		// ---------------------------------------------------------------------
+		// Bring-up experiment: tear down the low kernel identity mapping.
+		//
+		// Hypothesis:
+		// After switching execution to the higher-half alias, the kernel should no
+		// longer require the low identity mapping of its own image.
+		//
+		// Spec anchors (LoongArch-Vol1-EN.html):
+		// - Section 4.2.4.7 (INVTLB): INVTLB maintains consistency between the TLB
+		//   and page table data in memory. After changing page tables, we must
+		//   invalidate stale TLB entries.
+		// - Section 5.2 (Address Translation Mode): mapped mode uses the page-table
+		//   mappings; if we remove a mapping, accesses through that VA should fault.
+		//
+		// Minimal change:
+		// - Unmap the kernel's low identity range from the bootstrap page tables.
+		// - Flush TLB entries (INVTLB op=0).
+		// - Log software translations before/after as a sanity check.
+		//
+		// Keep-or-revert decision:
+		// - KEEP if the higher-half continuation keeps running and the low address
+		//   no longer translates.
+		// - REVERT if this produces no behavior change or prevents continued bring-up.
+		{
+			const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+			const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+			const std::uintptr_t kernel_size_bytes = (kernel_physical_end > kernel_physical_base)
+				? (kernel_physical_end - kernel_physical_base)
+				: 0;
+			const std::size_t map_size_rounded =
+				static_cast<std::size_t>((kernel_size_bytes + Rocinante::Memory::Paging::kPageSizeBytes - 1) &
+					~(Rocinante::Memory::Paging::kPageSizeBytes - 1));
+
+			uart.puts("Paging bring-up: identity teardown experiment enabled\n");
+			uart.puts("Paging bring-up:   low kernel base=");
+			uart.write_dec_u64(kernel_physical_base);
+			uart.puts(" size_bytes=");
+			uart.write_dec_u64(map_size_rounded);
+			uart.putc('\n');
+
+			const auto translated_low_before =
+				Rocinante::Memory::Paging::Translate(root, kernel_physical_base, g_paging_bringup_address_bits);
+			uart.puts("Paging bring-up:   Translate(low_kernel_base) before=");
+			if (translated_low_before.has_value()) {
+				uart.write_dec_u64(translated_low_before.value());
+			} else {
+				uart.puts("<none>");
+			}
+			uart.putc('\n');
+
+			if (map_size_rounded == 0) {
+				uart.puts("Paging bring-up:   identity teardown skipped (zero kernel size)\n");
+			} else {
+				for (std::size_t offset_bytes = 0; offset_bytes < map_size_rounded; offset_bytes += Rocinante::Memory::Paging::kPageSizeBytes) {
+					const std::uintptr_t low_virtual_page_base =
+						kernel_physical_base + static_cast<std::uintptr_t>(offset_bytes);
+					(void)Rocinante::Memory::Paging::UnmapPage4KiB(root, low_virtual_page_base, g_paging_bringup_address_bits);
+				}
+
+				uart.puts("Paging bring-up:   INVTLB op=0 (flush all)\n");
+				Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+			}
+
+			const auto translated_low_after =
+				Rocinante::Memory::Paging::Translate(root, kernel_physical_base, g_paging_bringup_address_bits);
+			uart.puts("Paging bring-up:   Translate(low_kernel_base) after=");
+			if (translated_low_after.has_value()) {
+				uart.write_dec_u64(translated_low_after.value());
+			} else {
+				uart.puts("<none>");
+			}
+			uart.putc('\n');
+
+			uart.puts("Paging bring-up: identity teardown experiment complete\n");
+		}
+		#endif
 	} else {
 		uart.puts("Paging bring-up: post-paging Translate self-check skipped (no root/address_bits)\n");
 	}
@@ -377,21 +513,7 @@ static const void* TryLocateDeviceTreeBlobPointerFromBootInfoRegion() {
 	uart.puts("Hello, Rocinante!\n");
 	uart.puts("Don the LoongArch64 armor and prepare to ride!\n\n");
 
-	uart.puts("CPU Architecture: ");
-	switch (cpucfg.Arch()) {
-		case Rocinante::CPUCFG::Architecture::SimplifiedLA32:
-			uart.puts("Simplified LA32\n");
-			break;
-		case Rocinante::CPUCFG::Architecture::LA32:
-			uart.puts("LA32\n");
-			break;
-		case Rocinante::CPUCFG::Architecture::LA64:
-			uart.puts("LA64\n");
-			break;
-		case Rocinante::CPUCFG::Architecture::Reserved:
-			uart.puts("Reserved/Unknown\n");
-			break;
-	}
+	PrintCpuArchitecture(uart, cpucfg.Arch());
 
 	uart.putc('\n');
 
@@ -465,11 +587,9 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	#endif
 
 	uart.puts("\n*** TRAP ***\n");
-	uart.puts("TYPE:  ");
-	uart.puts(ExceptionCodeToString(exception_code, exception_subcode));
-	uart.puts(" (EXC="); uart.write_hex_u64(exception_code);
+	uart.puts("EXC="); uart.write_hex_u64(exception_code);
 	uart.puts(" SUB="); uart.write_hex_u64(exception_subcode);
-	uart.puts(")\n");
+	uart.puts("\n");
 
 	uart.puts("CSR.ERA (exception return address): ");
 	uart.write_hex_u64(tf->exception_return_address);
@@ -1017,6 +1137,247 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 							if (kernel_physical_end > kernel_physical_base) {
 								DumpPagingProbe(kernel_physical_end - 1);
 							}
+
+							// Bring-up self-check: confirm our MMIO pages are mapped before we
+							// enable paging.
+							//
+							// Why:
+							// After CRMD.PG=1 and CRMD.DA=0, all instruction fetches and data
+							// accesses use mapped address translation. If we forgot to map the
+							// UART MMIO page (or mapped it at the wrong virtual address), the
+							// very next UART print can fault, and we lose our primary debugging
+							// channel.
+							//
+							// Spec anchor (LoongArch-Vol1-EN.html):
+							// - Section 5.2 (Address Translation Mode): when CRMD.DA=0 and
+							//   CRMD.PG=1, translation is performed via the page tables.
+							//
+							// Leaf PTE inspection helper.
+							//
+							// Goal:
+							// Confirm that our critical pages are not only mapped, but mapped with
+							// the intended per-page attributes (cache mode + execute inhibit).
+							//
+							// Spec anchor (LoongArch-Vol1-EN.html):
+							// - "Table entry format for common pages": leaf entries include cache
+							//   mode (MAT) and execute inhibit (NX).
+							const auto ReadLeafPteEntry_Assuming4Level4KiB =
+								[&](std::uintptr_t probe_va) -> Rocinante::Optional<std::uint64_t> {
+									constexpr std::size_t kIndexMask =
+										(1u << Rocinante::Memory::Paging::kIndexBitsPerLevel) - 1u;
+									constexpr std::size_t kShiftPt = Rocinante::Memory::Paging::kPageShiftBits;
+									constexpr std::size_t kShiftDirl = kShiftPt + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+									constexpr std::size_t kShiftDir2 = kShiftDirl + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+									constexpr std::size_t kShiftDir3 = kShiftDir2 + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+
+									const std::size_t idx_dir3 = static_cast<std::size_t>((probe_va >> kShiftDir3) & kIndexMask);
+									const std::size_t idx_dir2 = static_cast<std::size_t>((probe_va >> kShiftDir2) & kIndexMask);
+									const std::size_t idx_dirl = static_cast<std::size_t>((probe_va >> kShiftDirl) & kIndexMask);
+									const std::size_t idx_pt = static_cast<std::size_t>((probe_va >> kShiftPt) & kIndexMask);
+
+									auto* dir3 = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(root.root_physical_address);
+									if (!dir3) return Rocinante::nullopt;
+
+									const auto EntryIsWalkable = [](std::uint64_t entry) {
+										return (entry & (Rocinante::Memory::Paging::PteBits::kValid | Rocinante::Memory::Paging::PteBits::kPresent)) ==
+											(Rocinante::Memory::Paging::PteBits::kValid | Rocinante::Memory::Paging::PteBits::kPresent);
+									};
+									const auto EntryBase4K = [](std::uint64_t entry) {
+										return static_cast<std::uintptr_t>(
+											entry & ~static_cast<std::uint64_t>(Rocinante::Memory::Paging::kPageOffsetMask)
+										);
+									};
+
+									const std::uint64_t e3 = dir3->entries[idx_dir3];
+									if (!EntryIsWalkable(e3)) return Rocinante::nullopt;
+									auto* dir2 = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(EntryBase4K(e3));
+									if (!dir2) return Rocinante::nullopt;
+
+									const std::uint64_t e2 = dir2->entries[idx_dir2];
+									if (!EntryIsWalkable(e2)) return Rocinante::nullopt;
+									auto* dirl = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(EntryBase4K(e2));
+									if (!dirl) return Rocinante::nullopt;
+
+									const std::uint64_t e1 = dirl->entries[idx_dirl];
+									if (!EntryIsWalkable(e1)) return Rocinante::nullopt;
+									auto* pt = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(EntryBase4K(e1));
+									if (!pt) return Rocinante::nullopt;
+
+									return Rocinante::Optional<std::uint64_t>(pt->entries[idx_pt]);
+								};
+
+							uart.puts("Paging bring-up: MMIO translation self-check\n");
+							{
+								const auto uart_translated =
+									Rocinante::Memory::Paging::Translate(root, UART_BASE, address_bits);
+								uart.puts("Paging bring-up:   Translate(UART_BASE)=");
+								if (uart_translated.has_value()) {
+									uart.write_dec_u64(uart_translated.value());
+								} else {
+									uart.puts("<none>");
+								}
+								uart.putc('\n');
+								if (!uart_translated.has_value() || uart_translated.value() != UART_BASE) {
+									uart.puts("Paging bring-up: MMIO self-check FAILED (UART mapping)\n");
+									halt();
+								}
+
+								const auto uart_pte_or = ReadLeafPteEntry_Assuming4Level4KiB(UART_BASE);
+								uart.puts("Paging bring-up:   UART pte=");
+								if (uart_pte_or.has_value()) {
+									uart.write_dec_u64(uart_pte_or.value());
+								} else {
+									uart.puts("<none>");
+								}
+								uart.putc('\n');
+								if (!uart_pte_or.has_value()) {
+									uart.puts("Paging bring-up: MMIO self-check FAILED (UART PTE walk)\n");
+									halt();
+								}
+								{
+									const std::uint64_t uart_pte = uart_pte_or.value();
+									const std::uint64_t uart_cache_field =
+										(uart_pte & Rocinante::Memory::Paging::PteBits::kCacheMask) >> Rocinante::Memory::Paging::PteBits::kCacheShift;
+									const bool uart_nx = (uart_pte & Rocinante::Memory::Paging::PteBits::kNoExecute) != 0;
+									uart.puts("Paging bring-up:   UART cache=");
+									uart.write_dec_u64(uart_cache_field);
+									uart.puts(" nx=");
+									uart.puts(uart_nx ? "1" : "0");
+									uart.putc('\n');
+
+									const std::uint64_t expected_cache =
+										static_cast<std::uint64_t>(Rocinante::Memory::Paging::CacheMode::StrongUncached);
+									if (uart_cache_field != expected_cache || !uart_nx) {
+										uart.puts("Paging bring-up: MMIO self-check FAILED (UART attributes)\n");
+										halt();
+									}
+								}
+
+								const auto syscon_translated =
+									Rocinante::Memory::Paging::Translate(root, kSysconBase, address_bits);
+								uart.puts("Paging bring-up:   Translate(SysconBase)=");
+								if (syscon_translated.has_value()) {
+									uart.write_dec_u64(syscon_translated.value());
+								} else {
+									uart.puts("<none>");
+								}
+								uart.putc('\n');
+								if (!syscon_translated.has_value() || syscon_translated.value() != kSysconBase) {
+									uart.puts("Paging bring-up: MMIO self-check FAILED (syscon mapping)\n");
+									halt();
+								}
+
+								const auto syscon_pte_or = ReadLeafPteEntry_Assuming4Level4KiB(kSysconBase);
+								uart.puts("Paging bring-up:   syscon pte=");
+								if (syscon_pte_or.has_value()) {
+									uart.write_dec_u64(syscon_pte_or.value());
+								} else {
+									uart.puts("<none>");
+								}
+								uart.putc('\n');
+								if (!syscon_pte_or.has_value()) {
+									uart.puts("Paging bring-up: MMIO self-check FAILED (syscon PTE walk)\n");
+									halt();
+								}
+								{
+									const std::uint64_t syscon_pte = syscon_pte_or.value();
+									const std::uint64_t syscon_cache_field =
+										(syscon_pte & Rocinante::Memory::Paging::PteBits::kCacheMask) >> Rocinante::Memory::Paging::PteBits::kCacheShift;
+									const bool syscon_nx = (syscon_pte & Rocinante::Memory::Paging::PteBits::kNoExecute) != 0;
+									uart.puts("Paging bring-up:   syscon cache=");
+									uart.write_dec_u64(syscon_cache_field);
+									uart.puts(" nx=");
+									uart.puts(syscon_nx ? "1" : "0");
+									uart.putc('\n');
+
+									const std::uint64_t expected_cache =
+										static_cast<std::uint64_t>(Rocinante::Memory::Paging::CacheMode::StrongUncached);
+									if (syscon_cache_field != expected_cache || !syscon_nx) {
+										uart.puts("Paging bring-up: MMIO self-check FAILED (syscon attributes)\n");
+										halt();
+									}
+								}
+							}
+							uart.puts("Paging bring-up: MMIO translation self-check OK\n");
+
+							// Bring-up self-check: confirm the physmap maps at least the root page
+							// table page.
+							//
+							// Why:
+							// Once paging is enabled (CRMD.DA=0, CRMD.PG=1), the kernel must not
+							// dereference page-table pages by treating their physical address as a
+							// pointer. Our paging code relies on the physmap to access those pages.
+							// If the physmap window does not cover the root page-table page, page
+							// table walks will fault immediately in mapped mode.
+							//
+							// Spec anchors (LoongArch-Vol1-EN.html):
+							// - Section 5.2 (Address Translation Mode): when CRMD.DA=0 and CRMD.PG=1,
+							//   translation uses the page-table mappings.
+							// - "Table entry format for common pages": leaf entries include cache
+							//   mode (MAT) and execute inhibit (NX).
+							uart.puts("Paging bring-up: physmap translation self-check\n");
+							if (physmap_size_bytes == 0) {
+								uart.puts("Paging bring-up: physmap self-check skipped (no physmap window)\n");
+							} else {
+								const std::uintptr_t root_phys = root.root_physical_address;
+								const std::uintptr_t physmap_physical_limit = physmap_physical_base + physmap_size_bytes;
+								if (root_phys < physmap_physical_base || root_phys >= physmap_physical_limit) {
+									uart.puts("Paging bring-up: physmap self-check FAILED (root_pt not covered)\n");
+									halt();
+								}
+
+								const std::uintptr_t physmap_root_virtual =
+									Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(
+										root_phys,
+										address_bits.virtual_address_bits
+									);
+
+								const auto root_translated =
+									Rocinante::Memory::Paging::Translate(root, physmap_root_virtual, address_bits);
+								uart.puts("Paging bring-up:   Translate(physmap(root_pt))=");
+								if (root_translated.has_value()) {
+									uart.write_dec_u64(root_translated.value());
+								} else {
+									uart.puts("<none>");
+								}
+								uart.putc('\n');
+								if (!root_translated.has_value() || root_translated.value() != root_phys) {
+									uart.puts("Paging bring-up: physmap self-check FAILED (Translate mismatch)\n");
+									halt();
+								}
+
+								const auto root_pte_or = ReadLeafPteEntry_Assuming4Level4KiB(physmap_root_virtual);
+								uart.puts("Paging bring-up:   physmap(root_pt) pte=");
+								if (root_pte_or.has_value()) {
+									uart.write_dec_u64(root_pte_or.value());
+								} else {
+									uart.puts("<none>");
+								}
+								uart.putc('\n');
+								if (!root_pte_or.has_value()) {
+									uart.puts("Paging bring-up: physmap self-check FAILED (PTE walk)\n");
+									halt();
+								}
+								{
+									const std::uint64_t root_pte = root_pte_or.value();
+									const std::uint64_t root_cache_field =
+										(root_pte & Rocinante::Memory::Paging::PteBits::kCacheMask) >> Rocinante::Memory::Paging::PteBits::kCacheShift;
+									const bool root_nx = (root_pte & Rocinante::Memory::Paging::PteBits::kNoExecute) != 0;
+									uart.puts("Paging bring-up:   physmap(root_pt) cache=");
+									uart.write_dec_u64(root_cache_field);
+									uart.puts(" nx=");
+									uart.puts(root_nx ? "1" : "0");
+									uart.putc('\n');
+
+									const std::uint64_t expected_cache =
+										static_cast<std::uint64_t>(Rocinante::Memory::Paging::CacheMode::CoherentCached);
+									if (root_cache_field != expected_cache || !root_nx) {
+										uart.puts("Paging bring-up: physmap self-check FAILED (attributes)\n");
+										halt();
+									}
+								}
+							}
+							uart.puts("Paging bring-up: physmap translation self-check OK\n");
 
 							// Configure the page-walk CSRs and switch into mapped address
 							// translation mode.

@@ -563,12 +563,7 @@ class CPUCFG final {
 /**
  * @brief Single, canonical instance of CPUCFG that can be used throughout the kernel
  * to query CPU configuration.
- * 
- * @return CPUCFG& Reference to the single instance of CPUCFG.
  */
-static inline CPUCFG& GetCPUCFG() {
-	static CPUCFG instance;
-	return instance;
-}
+CPUCFG& GetCPUCFG();
 
 } // namespace Rocinante
