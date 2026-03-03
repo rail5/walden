@@ -29,7 +29,7 @@ Further:
 - **Avoid magic numbers.**
   - If a value comes from the architecture, hardware, ABI, or a spec: give it a name and explain it.
 - **Preserve invariants.**
-  - A lot of this code is ABI-sensitive (assembly -- C++ struct layout, linker script expectations, boot protocol). Make those invariants visible and hard to accidentally break.
+  - A lot of this code is ABI-sensitive (assembly<-->C++ struct layout, linker script expectations, boot protocol). Make those invariants visible and hard to accidentally break.
 - **Keep changes minimal and focused.**
   - Don't refactor unrelated code in the same change.
 - **Do not litter.**
@@ -98,7 +98,7 @@ When you are tempted to write a literal constant:
 
 ## Assembly Guidelines
 
-- **Treat assembly -- C++ boundaries as an ABI.**
+- **Treat assembly<-->C++ boundaries as an ABI.**
   - If an assembly routine builds a C++ struct (e.g., `TrapFrame`), keep field offsets and size synchronized and clearly documented.
 - **Use `.equ` for constants** (CSR numbers, offsets, sizes, bit positions). Add descriptive names and short comments.
 - **Document register-save policy.**
