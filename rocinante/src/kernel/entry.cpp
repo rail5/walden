@@ -7,6 +7,7 @@
 
 #include <src/boot/boot_print.h>
 #include <src/boot/dtb_scan.h>
+#include <src/boot/efi_system_table.h>
 #include <src/kernel/paging_bringup.h>
 #include <src/memory/memory.h>
 #include <src/memory/pmm.h>
@@ -116,7 +117,7 @@ static void PrintCpuArchitecture(const Rocinante::Uart16550& uart, Rocinante::CP
 
 } // namespace
 
-extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv, std::uint64_t kernel_cmdline_ptr, std::uint64_t boot_info_ptr_a2) {
+extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv, std::uint64_t kernel_cmdline_ptr, std::uint64_t efi_system_table_ptr) {
 	Rocinante::Memory::InitEarly();
 	Rocinante::Trap::Initialize();
 
@@ -127,7 +128,7 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	uart.puts(" a1=");
 	uart.write_dec_u64(kernel_cmdline_ptr);
 	uart.puts(" a2=");
-	uart.write_dec_u64(boot_info_ptr_a2);
+	uart.write_dec_u64(efi_system_table_ptr);
 	uart.putc('\n');
 
 	// Read the kernel command line from the pointer passed in a1 by the boot environment, if present.
@@ -149,10 +150,47 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	#endif
 
 	// Flaw / bring-up gap:
-	// We do not yet implement EFI system table parsing to locate ACPI/FDT tables.
-	// For QEMU direct-kernel bring-up, we therefore rely on a heuristic: scan low
-	// physical memory for a structurally-valid DTB.
-	const void* maybe_device_tree_blob = Rocinante::Boot::TryLocateDeviceTreeBlobPointerFromBootInfoRegion();
+	// We do not yet implement a full UEFI boot services environment.
+	//
+	// However, the Linux LoongArch boot protocol specifies that a2 points to an
+	// EFI system table, and QEMU's LoongArch direct-kernel boot constructs that
+	// table and includes the DTB pointer in the EFI configuration tables.
+	//
+	// Policy:
+	// - If a0 indicates a UEFI-compliant boot environment, try to locate the DTB
+	//   via the EFI system table configuration tables.
+	// - If that fails, fall back to the existing bring-up heuristic: scan low
+	//   physical memory for a structurally-valid DTB.
+	const void* maybe_device_tree_blob = nullptr;
+	const char* device_tree_source = nullptr;
+
+	if (is_uefi_compliant_bootenv != 0 && efi_system_table_ptr != 0) {
+		auto maybe_efi = Rocinante::Boot::EfiSystemTable::TryCreateFromPhysicalAddress(static_cast<std::uintptr_t>(efi_system_table_ptr));
+		if (maybe_efi.has_value()) {
+			uart.puts("UEFI: EFI system table detected: a2=");
+			uart.write_dec_u64(maybe_efi->PhysicalAddress());
+			uart.puts(" cfg_tables=");
+			uart.write_dec_u64(maybe_efi->ConfigurationTableEntryCount());
+			uart.putc('\n');
+
+			auto maybe_dtb_physical_address = maybe_efi->TryGetDeviceTreePhysicalAddress();
+			if (maybe_dtb_physical_address.has_value()) {
+				maybe_device_tree_blob = reinterpret_cast<const void*>(maybe_dtb_physical_address.value());
+				device_tree_source = "uefi(cfg-table)";
+			} else {
+				uart.puts("UEFI: no DTB entry found in configuration tables; falling back to scan\n");
+			}
+		} else {
+			uart.puts("UEFI: a2 did not look like a valid EFI system table; falling back to scan\n");
+		}
+	}
+
+	if (!maybe_device_tree_blob) {
+		maybe_device_tree_blob = Rocinante::Boot::TryLocateDeviceTreeBlobPointerFromBootInfoRegion();
+		if (maybe_device_tree_blob) {
+			device_tree_source = "scan(low-mem)";
+		}
+	}
 
 	if (maybe_device_tree_blob) {
 		const std::uintptr_t device_tree_physical_base = reinterpret_cast<std::uintptr_t>(maybe_device_tree_blob);
@@ -161,7 +199,8 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 		uart.write_dec_u64(device_tree_physical_base);
 		uart.puts(" size_bytes=");
 		uart.write_dec_u64(device_tree_size_bytes);
-		uart.puts(" source=scan(low-mem)");
+		uart.puts(" source=");
+		uart.puts(device_tree_source ? device_tree_source : "unknown");
 		uart.putc('\n');
 
 		Rocinante::Memory::BootMemoryMap boot_map;
