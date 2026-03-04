@@ -68,6 +68,20 @@ enum class PagingAccessType : std::uint8_t {
 };
 
 /**
+ * @brief Identifies whether the effective root page directory base came from PGDL or PGDH.
+ *
+ * Spec anchor (LoongArch-Vol1-EN.html):
+ * - Vol.1 Section 7.5.7 (PGD): CSR.PGD returns the global directory base corresponding to
+ *   the bad virtual address (CSR.BADV when IsTLBR=0), and it equals PGDL.Base when the
+ *   highest bit of the bad VA is 0, else PGDH.Base.
+ */
+enum class PagingPgdSelection : std::uint8_t {
+	Unknown = 0,
+	LowHalf,
+	HighHalf,
+};
+
+/**
  * @brief Structured information about a paging exception.
  *
  * This is intended as a stable, minimal contract for future microkernel-style
@@ -82,6 +96,27 @@ struct PagingFaultEvent final {
 	std::uint64_t current_mode_information;
 	std::uint64_t previous_mode_information;
 	std::uint64_t current_privilege_level;
+
+	// Address-space identity.
+	//
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Vol.1 Section 7.5.4 (ASID), Table 38:
+	//   - CSR.ASID.ASID is bits [9:0]
+	//   - CSR.ASID.ASIDBITS is bits [23:16]
+	std::uint16_t address_space_id;
+	std::uint8_t address_space_id_bits;
+
+	// Root page-table identity.
+	//
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Vol.1 Section 7.5.5 (PGDL) / 7.5.6 (PGDH): Base fields are 4 KiB aligned.
+	// - Vol.1 Section 7.5.7 (PGD), Table 41: CSR.PGD is a read-only effective Base chosen
+	//   from PGDL.Base or PGDH.Base based on the bad virtual address.
+	PagingPgdSelection pgd_selection;
+	std::uint64_t pgd_base;
+	std::uint64_t pgdl_base;
+	std::uint64_t pgdh_base;
+
 	PagingAccessType access_type;
 };
 

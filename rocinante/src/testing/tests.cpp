@@ -53,6 +53,20 @@ static std::uint64_t g_paging_fault_observer_last_bad_virtual_address = 0;
 static std::uint64_t g_paging_fault_observer_last_current_privilege_level = 0;
 static Rocinante::Trap::PagingAccessType g_paging_fault_observer_last_access_type = Rocinante::Trap::PagingAccessType::Unknown;
 
+static std::uint16_t g_paging_fault_observer_last_address_space_id = 0;
+static std::uint8_t g_paging_fault_observer_last_address_space_id_bits = 0;
+static Rocinante::Trap::PagingPgdSelection g_paging_fault_observer_last_pgd_selection =
+	Rocinante::Trap::PagingPgdSelection::Unknown;
+static std::uint64_t g_paging_fault_observer_last_pgd_base = 0;
+static std::uint64_t g_paging_fault_observer_last_pgdl_base = 0;
+static std::uint64_t g_paging_fault_observer_last_pgdh_base = 0;
+
+static bool g_paging_fault_pager_did_map = false;
+static std::uint64_t g_paging_fault_pager_invocation_count = 0;
+static std::uint64_t g_paging_fault_pager_last_bad_virtual_address = 0;
+static std::uint64_t g_paging_fault_pager_last_mapped_virtual_page_base = 0;
+static std::uint64_t g_paging_fault_pager_last_mapped_physical_page_base = 0;
+
 static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestProbe(
 	Rocinante::TrapFrame& tf,
 	const Rocinante::Trap::PagingFaultEvent& event
@@ -63,11 +77,92 @@ static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestProbe(
 	g_paging_fault_observer_last_bad_virtual_address = event.bad_virtual_address;
 	g_paging_fault_observer_last_current_privilege_level = event.current_privilege_level;
 	g_paging_fault_observer_last_access_type = event.access_type;
+	g_paging_fault_observer_last_address_space_id = event.address_space_id;
+	g_paging_fault_observer_last_address_space_id_bits = event.address_space_id_bits;
+	g_paging_fault_observer_last_pgd_selection = event.pgd_selection;
+	g_paging_fault_observer_last_pgd_base = event.pgd_base;
+	g_paging_fault_observer_last_pgdl_base = event.pgdl_base;
+	g_paging_fault_observer_last_pgdh_base = event.pgdh_base;
 
 	// Handle by skipping the faulting instruction.
 	// LoongArch instructions are 32-bit.
 	static constexpr std::uint64_t kInstructionSizeBytes = 4;
 	tf.exception_return_address += kInstructionSizeBytes;
+	return Rocinante::Trap::PagingFaultResult::Handled;
+}
+
+static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestPagerMapAndRetry(
+	Rocinante::TrapFrame& tf,
+	const Rocinante::Trap::PagingFaultEvent& event
+) {
+	(void)tf;
+
+	g_paging_fault_pager_invocation_count++;
+	g_paging_fault_pager_last_bad_virtual_address = event.bad_virtual_address;
+
+	if (g_paging_hw_virtual_address_bits == 0 || g_paging_hw_physical_address_bits == 0) {
+		return Rocinante::Trap::PagingFaultResult::NotHandled;
+	}
+
+	// Test pager policy: handle one canonical scratch-adjacent missing page by mapping it.
+	static constexpr std::uintptr_t kExpectedFaultVirtualAddress =
+		kPagingHwScratchVirtualPageBase + Rocinante::Memory::Paging::kPageSizeBytes;
+	static_assert((kExpectedFaultVirtualAddress % Rocinante::Memory::Paging::kPageSizeBytes) == 0);
+
+	if (event.bad_virtual_address != kExpectedFaultVirtualAddress) {
+		return Rocinante::Trap::PagingFaultResult::NotHandled;
+	}
+	if (g_paging_fault_pager_did_map) {
+		// Avoid infinite recursion if something goes wrong.
+		return Rocinante::Trap::PagingFaultResult::NotHandled;
+	}
+
+	// Map the missing page into the active root for this address.
+	//
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Vol.1 Section 7.5.7 (PGD), Table 41: CSR.PGD provides the effective root
+	//   page-directory Base corresponding to CSR.BADV in the current fault context.
+	const Rocinante::Memory::Paging::PageTableRoot root{
+		.root_physical_address = static_cast<std::uintptr_t>(event.pgd_base),
+	};
+
+	const Rocinante::Memory::Paging::AddressSpaceBits address_bits{
+		.virtual_address_bits = g_paging_hw_virtual_address_bits,
+		.physical_address_bits = g_paging_hw_physical_address_bits,
+	};
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	const auto page_or = pmm.AllocatePage();
+	if (!page_or.has_value()) {
+		return Rocinante::Trap::PagingFaultResult::NotHandled;
+	}
+
+	static constexpr Rocinante::Memory::Paging::PagePermissions kPermissions{
+		.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
+		.execute = Rocinante::Memory::Paging::ExecutePermissions::NoExecute,
+		.cache = Rocinante::Memory::Paging::CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	const bool mapped = Rocinante::Memory::Paging::MapPage4KiB(
+		&pmm,
+		root,
+		kExpectedFaultVirtualAddress,
+		page_or.value(),
+		kPermissions,
+		address_bits);
+	if (!mapped) {
+		return Rocinante::Trap::PagingFaultResult::NotHandled;
+	}
+
+	// Ensure the re-executed instruction observes the updated page tables.
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+
+	g_paging_fault_pager_did_map = true;
+	g_paging_fault_pager_last_mapped_virtual_page_base = kExpectedFaultVirtualAddress;
+	g_paging_fault_pager_last_mapped_physical_page_base = page_or.value();
+
+	// Important: do NOT advance ERA. Returning Handled should retry the instruction.
 	return Rocinante::Trap::PagingFaultResult::Handled;
 }
 
@@ -1274,6 +1369,12 @@ static void Test_PagingHw_PagingFaultObserver_DispatchesAndCanHandle(TestContext
 	g_paging_fault_observer_last_bad_virtual_address = 0;
 	g_paging_fault_observer_last_current_privilege_level = 0;
 	g_paging_fault_observer_last_access_type = Rocinante::Trap::PagingAccessType::Unknown;
+	g_paging_fault_observer_last_address_space_id = 0;
+	g_paging_fault_observer_last_address_space_id_bits = 0;
+	g_paging_fault_observer_last_pgd_selection = Rocinante::Trap::PagingPgdSelection::Unknown;
+	g_paging_fault_observer_last_pgd_base = 0;
+	g_paging_fault_observer_last_pgdl_base = 0;
+	g_paging_fault_observer_last_pgdh_base = 0;
 
 	Rocinante::Trap::SetPagingFaultObserver(&PagingFaultObserver_TestProbe);
 	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
@@ -1291,6 +1392,95 @@ static void Test_PagingHw_PagingFaultObserver_DispatchesAndCanHandle(TestContext
 	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_last_current_privilege_level, 0);
 	ROCINANTE_EXPECT_EQ_U64(ctx, static_cast<std::uint64_t>(g_paging_fault_observer_last_access_type),
 		static_cast<std::uint64_t>(Rocinante::Trap::PagingAccessType::Load));
+
+	// Address-space and PGD identity should be captured.
+	//
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Vol.1 Section 7.5.4 (ASID), Table 38.
+	// - Vol.1 Section 7.5.7 (PGD), Table 41.
+	static constexpr std::uint32_t kCsrAsid = 0x18;
+	static constexpr std::uint32_t kCsrPgdl = 0x19;
+	static constexpr std::uint32_t kCsrPgdh = 0x1a;
+	static constexpr std::uint32_t kCsrPgd = 0x1b;
+	static constexpr std::uint64_t kAsidMask = 0x3ff;
+	static constexpr std::uint64_t kAsidBitsShift = 16;
+	static constexpr std::uint64_t kAsidBitsMask = 0xff;
+	static constexpr std::uint64_t kPgdBaseMask = 0xfffffffffffff000ull;
+
+	std::uint64_t asid_csr = 0;
+	std::uint64_t pgdl_csr = 0;
+	std::uint64_t pgdh_csr = 0;
+	std::uint64_t pgd_csr = 0;
+	asm volatile("csrrd %0, %1" : "=r"(asid_csr) : "i"(kCsrAsid));
+	asm volatile("csrrd %0, %1" : "=r"(pgdl_csr) : "i"(kCsrPgdl));
+	asm volatile("csrrd %0, %1" : "=r"(pgdh_csr) : "i"(kCsrPgdh));
+	asm volatile("csrrd %0, %1" : "=r"(pgd_csr) : "i"(kCsrPgd));
+
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_last_address_space_id,
+		static_cast<std::uint64_t>(asid_csr & kAsidMask));
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_last_address_space_id_bits,
+		static_cast<std::uint64_t>((asid_csr >> kAsidBitsShift) & kAsidBitsMask));
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_last_pgd_base, (pgd_csr & kPgdBaseMask));
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_last_pgdl_base, (pgdl_csr & kPgdBaseMask));
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_last_pgdh_base, (pgdh_csr & kPgdBaseMask));
+	ROCINANTE_EXPECT_EQ_U64(ctx, static_cast<std::uint64_t>(g_paging_fault_observer_last_pgd_selection),
+		static_cast<std::uint64_t>(Rocinante::Trap::PagingPgdSelection::LowHalf));
+}
+
+static void Test_PagingHw_PagingFaultObserver_MapsAndRetries(TestContext* ctx) {
+	// This test runs after paging has been enabled.
+	// It installs a paging-fault observer that maps the missing page and proves
+	// we can recover by retrying the faulting instruction (no ERA adjustment).
+
+	// Sanity check: paging must be enabled (CRMD.PG=1, CRMD.DA=0).
+	static constexpr std::uint32_t kCsrCrmd = 0x0;
+	static constexpr std::uint64_t kCrmdPagingEnable = (1ull << 4);
+	static constexpr std::uint64_t kCrmdDirectAddressingEnable = (1ull << 3);
+	std::uint64_t crmd = 0;
+	asm volatile("csrrd %0, %1" : "=r"(crmd) : "i"(kCsrCrmd));
+	if ((crmd & kCrmdPagingEnable) == 0 || (crmd & kCrmdDirectAddressingEnable) != 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_virtual_address_bits != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_physical_address_bits != 0);
+	if (g_paging_hw_virtual_address_bits == 0 || g_paging_hw_physical_address_bits == 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	// Use the same provably-unmapped scratch-adjacent page as the unmapped-access test.
+	static constexpr std::uintptr_t kFaultVirtualAddress =
+		kPagingHwScratchVirtualPageBase + Rocinante::Memory::Paging::kPageSizeBytes;
+	static_assert((kFaultVirtualAddress % Rocinante::Memory::Paging::kPageSizeBytes) == 0);
+
+	// Reset pager observations and install observer.
+	g_paging_fault_pager_did_map = false;
+	g_paging_fault_pager_invocation_count = 0;
+	g_paging_fault_pager_last_bad_virtual_address = 0;
+	g_paging_fault_pager_last_mapped_virtual_page_base = 0;
+	g_paging_fault_pager_last_mapped_physical_page_base = 0;
+
+	Rocinante::Trap::SetPagingFaultObserver(&PagingFaultObserver_TestPagerMapAndRetry);
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+
+	// Trigger an unmapped store. The observer handles the fault by mapping the page,
+	// then the store is retried and must succeed.
+	const std::uint64_t store_value = 0x0123456789abcdefull;
+	asm volatile("st.d %0, %1, 0" :: "r"(store_value), "r"(kFaultVirtualAddress) : "memory");
+
+	// Always clear the observer so later tests keep their existing behavior.
+	Rocinante::Trap::SetPagingFaultObserver(nullptr);
+
+	volatile std::uint64_t* const p = reinterpret_cast<volatile std::uint64_t*>(kFaultVirtualAddress);
+	ROCINANTE_EXPECT_EQ_U64(ctx, *p, store_value);
+
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_fault_pager_did_map);
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_pager_invocation_count, 1);
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_pager_last_bad_virtual_address, kFaultVirtualAddress);
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_pager_last_mapped_virtual_page_base, kFaultVirtualAddress);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_fault_pager_last_mapped_physical_page_base != 0);
 }
 
 } // namespace
@@ -1312,6 +1502,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.PagingHw.EnablePaging.TlbRefillSmoke", &Test_PagingHw_EnablePaging_TlbRefillSmoke},
 	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV},
 	{"Memory.PagingHw.PagingFaultObserver.DispatchesAndCanHandle", &Test_PagingHw_PagingFaultObserver_DispatchesAndCanHandle},
+	{"Memory.PagingHw.PagingFaultObserver.MapsAndRetries", &Test_PagingHw_PagingFaultObserver_MapsAndRetries},
 	{"Memory.PagingHw.PostPaging.MapUnmap.Faults", &Test_PagingHw_PostPaging_MapUnmap_Faults},
 	{"Memory.PagingHw.HigherHalfStack.GuardPageFaults", &Test_PagingHw_HigherHalfStack_GuardPageFaults},
 };

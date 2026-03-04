@@ -148,6 +148,39 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	const bool is_paging_exception = (!is_tlbr) && IsPagingException(exception_code);
 	if (is_paging_exception) {
 		const std::uint64_t current_plv = CurrentPrivilegeLevelFromCrmd(tf->current_mode_information);
+
+		// Address-space and root-page-table identity.
+		//
+		// Spec anchor (LoongArch-Vol1-EN.html):
+		// - Vol.1 Section 7.5.4 (ASID), Table 38:
+		//   - CSR.ASID.ASID is bits [9:0]
+		//   - CSR.ASID.ASIDBITS is bits [23:16]
+		// - Vol.1 Section 7.5.7 (PGD), Table 41:
+		//   - CSR.PGD returns the effective root page directory base for the current BADV context.
+		static constexpr std::uint64_t kAsidMask = 0x3ff;
+		static constexpr std::uint64_t kAsidBitsShift = 16;
+		static constexpr std::uint64_t kAsidBitsMask = 0xff;
+		static constexpr std::uint64_t kPgdBaseMask = 0xfffffffffffff000ull;
+
+		const std::uint64_t asid_csr = ReadCsr<Csr::kAddressSpaceId>();
+		const std::uint64_t pgdl_csr = ReadCsr<Csr::kPgdLow>();
+		const std::uint64_t pgdh_csr = ReadCsr<Csr::kPgdHigh>();
+		const std::uint64_t pgd_csr = ReadCsr<Csr::kPgd>();
+
+		const std::uint64_t pgdl_base = pgdl_csr & kPgdBaseMask;
+		const std::uint64_t pgdh_base = pgdh_csr & kPgdBaseMask;
+		const std::uint64_t pgd_base = pgd_csr & kPgdBaseMask;
+
+		auto pgd_selection = Rocinante::Trap::PagingPgdSelection::Unknown;
+		if (pgd_base == pgdl_base && pgd_base != pgdh_base) {
+			pgd_selection = Rocinante::Trap::PagingPgdSelection::LowHalf;
+		} else if (pgd_base == pgdh_base && pgd_base != pgdl_base) {
+			pgd_selection = Rocinante::Trap::PagingPgdSelection::HighHalf;
+		} else if (pgd_base == pgdl_base && pgd_base == pgdh_base) {
+			// Early bring-up may set both halves to the same root.
+			pgd_selection = Rocinante::Trap::PagingPgdSelection::LowHalf;
+		}
+
 		const Rocinante::Trap::PagingFaultEvent event{
 			.exception_code = exception_code,
 			.exception_subcode = exception_subcode,
@@ -156,6 +189,12 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 			.current_mode_information = tf->current_mode_information,
 			.previous_mode_information = tf->previous_mode_information,
 			.current_privilege_level = current_plv,
+			.address_space_id = static_cast<std::uint16_t>(asid_csr & kAsidMask),
+			.address_space_id_bits = static_cast<std::uint8_t>((asid_csr >> kAsidBitsShift) & kAsidBitsMask),
+			.pgd_selection = pgd_selection,
+			.pgd_base = pgd_base,
+			.pgdl_base = pgdl_base,
+			.pgdh_base = pgdh_base,
 			.access_type = PagingAccessTypeFromExceptionCode(exception_code),
 		};
 
