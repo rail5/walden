@@ -1858,6 +1858,17 @@ nx_resume:
 		// EP=1 but no PNX observed. This is a hard failure: it means NX is either
 		// not being enforced by the platform/emulator, or the refill/fill pipeline
 		// is not preserving the NX attribute.
+		//
+		// In fact, we're hitting this failure on QEMU LoongArch, which reports EP=1
+		// Possibilities:
+		// - QEMU bug (least likely)
+		// - Somehow not preserving NX (re-check trap.S)
+		// - LoongArch spec is ambiguous and QEMU is compliant (more likely?):
+		//   Maybe EP=1 only means the CPU *supports* an NX attribute, but it doesn't
+		//   have to enforce it. In this case I would expect some kind of CSR bit
+		//   to control enforcement, but I haven't seen one mentioned yet. I'll try
+		//   to follow up on this.
+		// - I'm not sure what else at this point.
 		Rocinante::Testing::Fail(ctx, __FILE__, __LINE__,
 			"EP=1 but no PNX observed for NX-mapped alias fetch");
 	}
