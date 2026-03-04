@@ -67,6 +67,58 @@ static std::uint64_t g_paging_fault_pager_last_bad_virtual_address = 0;
 static std::uint64_t g_paging_fault_pager_last_mapped_virtual_page_base = 0;
 static std::uint64_t g_paging_fault_pager_last_mapped_physical_page_base = 0;
 
+static std::uint64_t g_paging_hw_nx_fault_invocation_count = 0;
+static std::uint64_t g_paging_hw_nx_fault_last_exception_code = 0;
+static std::uint64_t g_paging_hw_nx_fault_last_bad_virtual_address = 0;
+static Rocinante::Trap::PagingAccessType g_paging_hw_nx_fault_last_access_type =
+	Rocinante::Trap::PagingAccessType::Unknown;
+static std::uint64_t g_paging_hw_nx_expected_bad_virtual_address_masked = 0;
+static std::uint64_t g_paging_hw_nx_resume_exception_return_address = 0;
+
+static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestNxFetch_RaisesPnx(
+	Rocinante::TrapFrame& tf,
+	const Rocinante::Trap::PagingFaultEvent& event
+) {
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - BADV captures the faulting VA for paging exceptions, but for LA64 only
+	//   bits [VALEN-1:13] are architecturally recorded.
+	static constexpr std::uint64_t kBadvLowBitsMask = (1ull << 13) - 1;
+
+	const std::uint64_t badv_masked = event.bad_virtual_address & ~kBadvLowBitsMask;
+	if (badv_masked != g_paging_hw_nx_expected_bad_virtual_address_masked) {
+		return Rocinante::Trap::PagingFaultResult::NotHandled;
+	}
+
+	g_paging_hw_nx_fault_invocation_count++;
+	g_paging_hw_nx_fault_last_exception_code = event.exception_code;
+	g_paging_hw_nx_fault_last_bad_virtual_address = event.bad_virtual_address;
+	g_paging_hw_nx_fault_last_access_type = event.access_type;
+
+	// Preferred resume policy: jump to a test-provided mapped return site.
+	//
+	// Rationale:
+	// - For instruction-fetch faults (e.g. PNX), skipping +4 does not escape the
+	//   NX mapping.
+	// - Using $ra (r1) is fragile if the trapframe doesn't reliably preserve it
+	//   across all exception types/emulator behaviors.
+	if (g_paging_hw_nx_resume_exception_return_address != 0) {
+		tf.exception_return_address = g_paging_hw_nx_resume_exception_return_address;
+		return Rocinante::Trap::PagingFaultResult::Handled;
+	}
+
+	// Resume execution by returning to the saved return address ($ra = r1).
+	//
+	// Rationale:
+	// - Instruction-fetch faults (e.g. PNX) report an ERA that points into the
+	//   faulting page. Advancing ERA by +4 would not escape the NX mapping.
+	// - The indirect call that triggers the fetch sets $ra to a mapped return site.
+	//
+	// TrapFrame contract: general_purpose_registers[i] corresponds to GPR r{i}.
+	static constexpr std::size_t kRegisterRa = 1;
+	tf.exception_return_address = tf.general_purpose_registers[kRegisterRa];
+	return Rocinante::Trap::PagingFaultResult::Handled;
+}
+
 static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestProbe(
 	Rocinante::TrapFrame& tf,
 	const Rocinante::Trap::PagingFaultEvent& event
@@ -171,6 +223,10 @@ extern "C" void RocinanteTesting_SwitchStackAndStore(
 	std::uintptr_t store_address,
 	std::uint64_t store_value);
 
+extern "C" void RocinanteTesting_StoreAndReturn(
+	std::uintptr_t store_address,
+	std::uint64_t store_value);
+
 asm(R"(
 	.text
 	.globl RocinanteTesting_SwitchStackAndStore
@@ -181,6 +237,13 @@ RocinanteTesting_SwitchStackAndStore:
 	move   $sp, $a0
 	st.d   $a2, $a1, 0
 	move   $sp, $t0
+	jr     $ra
+
+	.globl RocinanteTesting_StoreAndReturn
+	.type RocinanteTesting_StoreAndReturn, @function
+	.p2align 2
+RocinanteTesting_StoreAndReturn:
+	st.d   $a1, $a0, 0
 	jr     $ra
 )");
 
@@ -1483,6 +1546,342 @@ static void Test_PagingHw_PagingFaultObserver_MapsAndRetries(TestContext* ctx) {
 	ROCINANTE_EXPECT_TRUE(ctx, g_paging_fault_pager_last_mapped_physical_page_base != 0);
 }
 
+static void Test_PagingHw_ReadOnlyStore_RaisesPme(TestContext* ctx) {
+	// This test runs after paging has been enabled.
+	// It maps a page with D=0 (no-dirty / no-write) and asserts that a store
+	// triggers PME (EXCCODE=0x4) and reports the fault VA in BADV.
+
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapPage4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::PageTableRoot;
+
+	// LoongArch EXCCODE values (Table 21):
+	// - 0x4 => PME: page modification exception
+	static constexpr std::uint64_t kExceptionCodePme = 0x4;
+
+	// Sanity check: paging must be enabled (CRMD.PG=1, CRMD.DA=0).
+	static constexpr std::uint32_t kCsrCrmd = 0x0;
+	static constexpr std::uint64_t kCrmdPagingEnable = (1ull << 4);
+	static constexpr std::uint64_t kCrmdDirectAddressingEnable = (1ull << 3);
+	std::uint64_t crmd = 0;
+	asm volatile("csrrd %0, %1" : "=r"(crmd) : "i"(kCsrCrmd));
+	if ((crmd & kCrmdPagingEnable) == 0 || (crmd & kCrmdDirectAddressingEnable) != 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_root_page_table_physical != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_virtual_address_bits != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_physical_address_bits != 0);
+	if (g_paging_hw_root_page_table_physical == 0 || g_paging_hw_virtual_address_bits == 0 || g_paging_hw_physical_address_bits == 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = g_paging_hw_virtual_address_bits,
+		.physical_address_bits = g_paging_hw_physical_address_bits,
+	};
+
+	const PageTableRoot root{.root_physical_address = g_paging_hw_root_page_table_physical};
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+
+	// Choose a scratch-adjacent page not otherwise used by the suite.
+	static constexpr std::uintptr_t kReadOnlyVirtualPageBase =
+		kPagingHwScratchVirtualPageBase + (4 * PhysicalMemoryManager::kPageSizeBytes);
+	static_assert((kReadOnlyVirtualPageBase % PhysicalMemoryManager::kPageSizeBytes) == 0);
+
+	const auto page_or = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, page_or.has_value());
+	if (!page_or.has_value()) return;
+
+	// Initialize the physical page through the physmap so a mapped-mode load can verify it.
+	const std::uintptr_t physmap_virtual =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(page_or.value(), address_bits.virtual_address_bits);
+	auto* physmap_u64 = reinterpret_cast<volatile std::uint64_t*>(physmap_virtual);
+	*physmap_u64 = 0x1122334455667788ull;
+
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(
+		&pmm,
+		root,
+		kReadOnlyVirtualPageBase,
+		page_or.value(),
+		PagePermissions{
+			.access = AccessPermissions::ReadOnly,
+			.execute = ExecutePermissions::NoExecute,
+			.cache = CacheMode::CoherentCached,
+			.global = true,
+		},
+		address_bits));
+
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+
+	// Mapped-mode load must succeed.
+	auto* readonly_u64 = reinterpret_cast<volatile std::uint64_t*>(kReadOnlyVirtualPageBase);
+	ROCINANTE_EXPECT_EQ_U64(ctx, *readonly_u64, 0x1122334455667788ull);
+
+	// Store to a valid page with D=0 must raise PME (spec: 5.4.4 pseudocode + Table 21).
+	ArmExpectedTrap(kExceptionCodePme);
+	const std::uint64_t store_value = 0xaabbccddeeff0011ull;
+	asm volatile("st.d %0, %1, 0" :: "r"(store_value), "r"(kReadOnlyVirtualPageBase) : "memory");
+	ROCINANTE_EXPECT_TRUE(ctx, ExpectedTrapObserved());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapExceptionCode(), kExceptionCodePme);
+	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapBadVaddr(), kReadOnlyVirtualPageBase);
+}
+
+static void Test_PagingHw_NonExecutableFetch_RaisesPnx(TestContext* ctx) {
+	// This test runs after paging has been enabled.
+	// It maps a known executable code page at a scratch VA with NX=1 and asserts
+	// that an instruction fetch through that alias triggers PNX (EXCCODE=0x6).
+
+	// Spec anchor (LoongArch-Vol1-EN.html, CPUCFG word 0x1):
+	// - Bit 22 (EP): "1 indicates support for page attribute of 'Execution Protection'".
+	// If EP=0, NX may be ignored/cleared by the CPU (or emulator), so this test
+	// is not applicable.
+	if (!Rocinante::GetCPUCFG().SupportsExecProtection()) {
+		return;
+	}
+
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapPage4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::PageTableRoot;
+	using Rocinante::Memory::Paging::Translate;
+	using Rocinante::Memory::Paging::UnmapPage4KiB;
+	namespace PteBits = Rocinante::Memory::Paging::PteBits;
+
+	// LoongArch EXCCODE values (Table 21):
+	// - 0x6 => PNX: page non-executable exception
+	static constexpr std::uint64_t kExceptionCodePnx = 0x6;
+
+	// Sanity check: paging must be enabled (CRMD.PG=1, CRMD.DA=0).
+	static constexpr std::uint32_t kCsrCrmd = 0x0;
+	static constexpr std::uint64_t kCrmdPagingEnable = (1ull << 4);
+	static constexpr std::uint64_t kCrmdDirectAddressingEnable = (1ull << 3);
+	std::uint64_t crmd = 0;
+	asm volatile("csrrd %0, %1" : "=r"(crmd) : "i"(kCsrCrmd));
+	if ((crmd & kCrmdPagingEnable) == 0 || (crmd & kCrmdDirectAddressingEnable) != 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_root_page_table_physical != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_virtual_address_bits != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_physical_address_bits != 0);
+	if (g_paging_hw_root_page_table_physical == 0 || g_paging_hw_virtual_address_bits == 0 || g_paging_hw_physical_address_bits == 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = g_paging_hw_virtual_address_bits,
+		.physical_address_bits = g_paging_hw_physical_address_bits,
+	};
+
+	const PageTableRoot root{.root_physical_address = g_paging_hw_root_page_table_physical};
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+
+	// Choose a scratch-adjacent page not otherwise used by the suite.
+	// Use an even page in a dual-page (8 KiB) pair to avoid BADV low-bit ambiguity.
+	static constexpr std::uintptr_t kNxAliasVirtualPageBase =
+		kPagingHwScratchVirtualPageBase + (6 * PhysicalMemoryManager::kPageSizeBytes);
+	static_assert((kNxAliasVirtualPageBase % (2 * PhysicalMemoryManager::kPageSizeBytes)) == 0);
+
+	const std::uintptr_t target_virtual = reinterpret_cast<std::uintptr_t>(&RocinanteTesting_StoreAndReturn);
+	const std::uintptr_t target_virtual_page_base =
+		target_virtual & ~(PhysicalMemoryManager::kPageSizeBytes - 1);
+	const std::uintptr_t target_offset = target_virtual - target_virtual_page_base;
+	ROCINANTE_EXPECT_TRUE(ctx, target_offset < PhysicalMemoryManager::kPageSizeBytes);
+
+	const auto target_physical_page0_or = Translate(root, target_virtual_page_base, address_bits);
+	ROCINANTE_EXPECT_TRUE(ctx, target_physical_page0_or.has_value());
+	if (!target_physical_page0_or.has_value()) return;
+
+	const std::uintptr_t target_virtual_page_base_plus1 = target_virtual_page_base + PhysicalMemoryManager::kPageSizeBytes;
+	const auto target_physical_page1_or = Translate(root, target_virtual_page_base_plus1, address_bits);
+
+	const std::uintptr_t alias_target_virtual = kNxAliasVirtualPageBase + target_offset;
+
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Page non-executable exception: fetch finds a match in TLB with V=1, PLV legal, NX=1.
+	static constexpr PagePermissions kNxPermissions{
+		.access = AccessPermissions::ReadOnly,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	const bool mapped0 = MapPage4KiB(
+		&pmm,
+		root,
+		kNxAliasVirtualPageBase,
+		static_cast<std::uintptr_t>(target_physical_page0_or.value()),
+		kNxPermissions,
+		address_bits);
+	ROCINANTE_EXPECT_TRUE(ctx, mapped0);
+	if (!mapped0) return;
+
+	bool mapped1 = false;
+	if (target_physical_page1_or.has_value()) {
+		mapped1 = MapPage4KiB(
+			&pmm,
+			root,
+			kNxAliasVirtualPageBase + PhysicalMemoryManager::kPageSizeBytes,
+			static_cast<std::uintptr_t>(target_physical_page1_or.value()),
+			kNxPermissions,
+			address_bits);
+		ROCINANTE_EXPECT_TRUE(ctx, mapped1);
+	}
+
+
+	// Diagnostic: read back the raw leaf PTE from memory (via physmap).
+	// This localizes whether NX is missing in the page table entry itself, vs.
+	// being dropped during hardware page-walk refill/TLBFILL.
+	{
+		using Rocinante::Memory::Paging::PageTablePage;
+		const auto ReadLeafPteEntry_UsingPhysmap_Assuming4Level4KiB =
+			[&](std::uintptr_t probe_va) -> Rocinante::Optional<std::uint64_t> {
+				constexpr std::size_t kIndexMask =
+					(1u << Rocinante::Memory::Paging::kIndexBitsPerLevel) - 1u;
+				constexpr std::size_t kShiftPt = Rocinante::Memory::Paging::kPageShiftBits;
+				constexpr std::size_t kShiftDirl = kShiftPt + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+				constexpr std::size_t kShiftDir2 = kShiftDirl + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+				constexpr std::size_t kShiftDir3 = kShiftDir2 + Rocinante::Memory::Paging::kIndexBitsPerLevel;
+
+				const std::size_t idx_dir3 = static_cast<std::size_t>((probe_va >> kShiftDir3) & kIndexMask);
+				const std::size_t idx_dir2 = static_cast<std::size_t>((probe_va >> kShiftDir2) & kIndexMask);
+				const std::size_t idx_dirl = static_cast<std::size_t>((probe_va >> kShiftDirl) & kIndexMask);
+				const std::size_t idx_pt = static_cast<std::size_t>((probe_va >> kShiftPt) & kIndexMask);
+
+				const auto PhysToPhysmap = [&](std::uintptr_t physical) -> std::uintptr_t {
+					return Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(
+						physical,
+						address_bits.virtual_address_bits);
+				};
+
+				auto* dir3 = reinterpret_cast<PageTablePage*>(PhysToPhysmap(root.root_physical_address));
+				if (!dir3) return Rocinante::nullopt;
+
+				const auto EntryIsWalkable = [](std::uint64_t entry) {
+					return (entry & (PteBits::kValid | PteBits::kPresent)) == (PteBits::kValid | PteBits::kPresent);
+				};
+				const auto EntryBase4K = [](std::uint64_t entry) {
+					return static_cast<std::uintptr_t>(
+						entry & ~static_cast<std::uint64_t>(Rocinante::Memory::Paging::kPageOffsetMask)
+					);
+				};
+
+				const std::uint64_t e3 = dir3->entries[idx_dir3];
+				if (!EntryIsWalkable(e3)) return Rocinante::nullopt;
+				auto* dir2 = reinterpret_cast<PageTablePage*>(PhysToPhysmap(EntryBase4K(e3)));
+				if (!dir2) return Rocinante::nullopt;
+
+				const std::uint64_t e2 = dir2->entries[idx_dir2];
+				if (!EntryIsWalkable(e2)) return Rocinante::nullopt;
+				auto* dirl = reinterpret_cast<PageTablePage*>(PhysToPhysmap(EntryBase4K(e2)));
+				if (!dirl) return Rocinante::nullopt;
+
+				const std::uint64_t e1 = dirl->entries[idx_dirl];
+				if (!EntryIsWalkable(e1)) return Rocinante::nullopt;
+				auto* pt = reinterpret_cast<PageTablePage*>(PhysToPhysmap(EntryBase4K(e1)));
+				if (!pt) return Rocinante::nullopt;
+
+				return Rocinante::Optional<std::uint64_t>(pt->entries[idx_pt]);
+			};
+
+		const auto pte_or = ReadLeafPteEntry_UsingPhysmap_Assuming4Level4KiB(alias_target_virtual);
+		ROCINANTE_EXPECT_TRUE(ctx, pte_or.has_value());
+		if (pte_or.has_value()) {
+			const std::uint64_t pte = pte_or.value();
+			ROCINANTE_EXPECT_TRUE(ctx, (pte & PteBits::kNoExecute) != 0);
+
+			const std::uint64_t physical_mask =
+				(address_bits.physical_address_bits >= 64)
+					? ~0ull
+					: ((1ull << address_bits.physical_address_bits) - 1ull);
+			const std::uint64_t pte_phys_base =
+				(pte & physical_mask) & ~static_cast<std::uint64_t>(Rocinante::Memory::Paging::kPageOffsetMask);
+			ROCINANTE_EXPECT_EQ_U64(ctx, pte_phys_base, static_cast<std::uint64_t>(target_physical_page0_or.value()));
+		}
+	}
+
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+
+	// Reset observations.
+	g_paging_hw_nx_fault_invocation_count = 0;
+	g_paging_hw_nx_fault_last_exception_code = 0;
+	g_paging_hw_nx_fault_last_bad_virtual_address = 0;
+	g_paging_hw_nx_fault_last_access_type = Rocinante::Trap::PagingAccessType::Unknown;
+	g_paging_hw_nx_resume_exception_return_address = 0;
+
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - For LA64, BADV records bits [VALEN-1:13] of the faulting VA for paging exceptions.
+	static constexpr std::uint64_t kBadvLowBitsMask = (1ull << 13) - 1;
+	g_paging_hw_nx_expected_bad_virtual_address_masked =
+		static_cast<std::uint64_t>(alias_target_virtual) & ~kBadvLowBitsMask;
+
+	// Install observer immediately before triggering the NX fetch.
+	Rocinante::Trap::SetPagingFaultObserver(&PagingFaultObserver_TestNxFetch_RaisesPnx);
+
+	// Trigger an instruction fetch through the NX alias.
+	//
+	// If NX is incorrectly ignored, the alias will execute this stub and perform
+	// the store, then return normally. If NX is enforced, we should observe a PNX
+	// exception before the first instruction executes.
+	volatile std::uint64_t observed_store_value = 0;
+	static constexpr std::uint64_t kExpectedStoreValue = 0xfeedfacecafebeefull;
+
+	using Fn = void (*)(std::uintptr_t, std::uint64_t);
+	volatile Fn fn = reinterpret_cast<Fn>(alias_target_virtual);
+	// GNU extension: take the address of a local label to use as a known-good
+	// exception return site when the NX fetch faults.
+	g_paging_hw_nx_resume_exception_return_address = reinterpret_cast<std::uint64_t>(&&nx_resume);
+	fn(reinterpret_cast<std::uintptr_t>(&observed_store_value), kExpectedStoreValue);
+
+nx_resume:
+	g_paging_hw_nx_resume_exception_return_address = 0;
+
+	// Always clear the observer so later tests keep their existing behavior.
+	Rocinante::Trap::SetPagingFaultObserver(nullptr);
+
+	// If NX is enforced, we should observe a PNX fault and the stub should NOT run.
+	if (g_paging_hw_nx_fault_invocation_count == 0) {
+		// EP=1 but no PNX observed. This is a hard failure: it means NX is either
+		// not being enforced by the platform/emulator, or the refill/fill pipeline
+		// is not preserving the NX attribute.
+		Rocinante::Testing::Fail(ctx, __FILE__, __LINE__,
+			"EP=1 but no PNX observed for NX-mapped alias fetch");
+	}
+
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_hw_nx_fault_invocation_count, 1);
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_hw_nx_fault_last_exception_code, kExceptionCodePnx);
+	ROCINANTE_EXPECT_EQ_U64(ctx, static_cast<std::uint64_t>(g_paging_hw_nx_fault_last_access_type),
+		static_cast<std::uint64_t>(Rocinante::Trap::PagingAccessType::Fetch));
+
+	// BADV comparison: check the architecturally recorded portion.
+	ROCINANTE_EXPECT_EQ_U64(ctx,
+		(g_paging_hw_nx_fault_last_bad_virtual_address & ~kBadvLowBitsMask),
+		g_paging_hw_nx_expected_bad_virtual_address_masked);
+
+	ROCINANTE_EXPECT_EQ_U64(ctx, observed_store_value, 0);
+
+	// Clean up the mapping to avoid TLB/page-table state leaking into later tests.
+	(void)UnmapPage4KiB(root, kNxAliasVirtualPageBase, address_bits);
+	if (mapped1) {
+		(void)UnmapPage4KiB(root, kNxAliasVirtualPageBase + PhysicalMemoryManager::kPageSizeBytes, address_bits);
+	}
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+}
+
 } // namespace
 
 extern const TestCase g_test_cases[] = {
@@ -1503,6 +1902,8 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV},
 	{"Memory.PagingHw.PagingFaultObserver.DispatchesAndCanHandle", &Test_PagingHw_PagingFaultObserver_DispatchesAndCanHandle},
 	{"Memory.PagingHw.PagingFaultObserver.MapsAndRetries", &Test_PagingHw_PagingFaultObserver_MapsAndRetries},
+	{"Memory.PagingHw.ReadOnlyStore.RaisesPME", &Test_PagingHw_ReadOnlyStore_RaisesPme},
+	{"Memory.PagingHw.NonExecutableFetch.RaisesPNX", &Test_PagingHw_NonExecutableFetch_RaisesPnx},
 	{"Memory.PagingHw.PostPaging.MapUnmap.Faults", &Test_PagingHw_PostPaging_MapUnmap_Faults},
 	{"Memory.PagingHw.HigherHalfStack.GuardPageFaults", &Test_PagingHw_HigherHalfStack_GuardPageFaults},
 };
