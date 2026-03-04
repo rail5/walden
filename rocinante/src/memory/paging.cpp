@@ -6,6 +6,7 @@
 #include "paging.h"
 
 #include <src/memory/pmm.h>
+#include <src/memory/paging_state.h>
 #include <src/memory/virtual_layout.h>
 #include <src/sp/cpucfg.h>
 
@@ -194,7 +195,10 @@ static PageTablePage* PageTablePageFromPhysical(std::uintptr_t physical_page_bas
 
 	// Mapped mode: page-table pages must be accessed through a mapped virtual
 	// address. Rocinante policy is a higher-half linear physmap.
-	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const Rocinante::Memory::PagingState* paging_state = Rocinante::Memory::TryGetPagingState();
+	const std::uint8_t virtual_address_bits = paging_state
+		? paging_state->address_bits.virtual_address_bits
+		: static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
 	const std::uintptr_t physmap_virtual =
 		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(physical_page_base, virtual_address_bits);
 	return reinterpret_cast<PageTablePage*>(physmap_virtual);
@@ -205,7 +209,10 @@ static const PageTablePage* PageTablePageFromPhysicalConst(std::uintptr_t physic
 		return reinterpret_cast<const PageTablePage*>(physical_page_base);
 	}
 
-	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const Rocinante::Memory::PagingState* paging_state = Rocinante::Memory::TryGetPagingState();
+	const std::uint8_t virtual_address_bits = paging_state
+		? paging_state->address_bits.virtual_address_bits
+		: static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
 	const std::uintptr_t physmap_virtual =
 		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(physical_page_base, virtual_address_bits);
 	return reinterpret_cast<const PageTablePage*>(physmap_virtual);

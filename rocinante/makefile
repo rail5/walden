@@ -88,14 +88,10 @@ CFLAGS         = --target=$(TARGET_TRIPLE) -ffreestanding -nostdlib -fno-asynchr
 CXXFLAGS       = $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++23
 LDFLAGS        = --target=$(TARGET_TRIPLE) -fuse-ld=lld -nostdlib -static -Wl,-no-pie -Wl,-T,$(LINKER_LD) -Wl,-s
 
-ifeq ($(ROCINANTE_PAGING_BRINGUP),1)
-	CFLAGS += -DROCINANTE_PAGING_BRINGUP
-	CXXFLAGS += -DROCINANTE_PAGING_BRINGUP
-endif
 
-ifeq ($(ROCINANTE_PAGING_IDENTITY_TEARDOWN_EXPERIMENT),1)
-	CFLAGS += -DROCINANTE_PAGING_IDENTITY_TEARDOWN_EXPERIMENT
-	CXXFLAGS += -DROCINANTE_PAGING_IDENTITY_TEARDOWN_EXPERIMENT
+ifeq ($(ROCINANTE_TLBREFILL_UART_BREADCRUMBS),1)
+	CFLAGS += -DROCINANTE_TLBREFILL_UART_BREADCRUMBS
+	CXXFLAGS += -DROCINANTE_TLBREFILL_UART_BREADCRUMBS
 endif
 
 ifeq ($(ROCINANTE_TESTS),1)
@@ -173,12 +169,12 @@ clean:
 
 run: $(TARGET)
 	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
-		-monitor none -kernel $< -append "test=1"
+		-monitor none -kernel $<
 
 run-serial: $(TARGET)
 	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
 		-nographic -serial stdio -monitor none \
-		-kernel $< -append "test=1"
+		-kernel $<
 
 test:
 	@$(MAKE) -C $(PROJECT_ROOT_DIRECTORY) ROCINANTE_TESTS=1 MAKEFLAGS= clean all

@@ -294,7 +294,7 @@ __exception_entry:
 .equ CSR_TLBRELO0, 0x8C // CSR.TLBRELO0
 .equ CSR_TLBRELO1, 0x8D // CSR.TLBRELO1
 
-#if defined(ROCINANTE_PAGING_BRINGUP)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 .section .rodata
 .p2align 4
 __rocinante_hex_digits:
@@ -351,8 +351,8 @@ __tlb_refill_entry:
 // starts firing frequently (they can interleave with normal UART output).
 // Keep them available for deep paging bring-up, but default them off.
 //
-// Enable by defining ROCINANTE_TLBR_UART_BREADCRUMBS at build time.
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+// Enable by defining ROCINANTE_TLBREFILL_UART_BREADCRUMBS at build time.
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	// Optional single-shot diagnostics.
 	//
 	// Use a BSS flag (direct-addressing-safe) to avoid flooding UART.
@@ -444,7 +444,7 @@ __tlb_refill_entry:
 	or     $t1, $t1, $t0
 	csrwr  $t1, CSR_TLBIDX
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	// UART breadcrumb: configured TLBIDX.
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, 'I'
@@ -454,7 +454,7 @@ __tlb_refill_entry:
 	// Start from the effective page-table root.
 	csrrd  $t0, CSR_PGD
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	// UART breadcrumb: loaded effective page-table root.
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, 'R'
@@ -498,7 +498,7 @@ __tlb_refill_entry:
 	and    $t0, $t3, $t2
 1:
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, '4'
 	st.b   $t2, $t3, 0
@@ -522,7 +522,7 @@ __tlb_refill_entry:
 	and    $t0, $t3, $t2
 2:
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, '3'
 	st.b   $t2, $t3, 0
@@ -549,7 +549,7 @@ __tlb_refill_entry:
 	and    $t0, $t3, $t2
 3:
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, '2'
 	st.b   $t2, $t3, 0
@@ -574,13 +574,13 @@ __tlb_refill_entry:
 	and    $t0, $t3, $t2
 4:
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, '1'
 	st.b   $t2, $t3, 0
 #endif
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	// Single-shot diagnostic: dump the raw even/odd PTE values from the leaf
 	// PTE table page we just reached.
 	//
@@ -677,7 +677,7 @@ pte_dump_done:
 	ldpte  $t0, 0
 	ldpte  $t0, 1
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	// UART breadcrumbs: did LDPTE fetch *present* PTEs?
 	// Print 'v' if V=1, '0' if V=0 for each half.
 	li.d   $t3, UART16550_BASE
@@ -713,7 +713,7 @@ pte_dump_done:
 	csrrd  $t1, CSR_TLBRELO1
 	csrwr  $t1, CSR_TLBELO1
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, 'P'
 	st.b   $t2, $t3, 0
@@ -722,7 +722,7 @@ pte_dump_done:
 	// Fill a TLB entry selected by hardware.
 	tlbfill
 
-#if defined(ROCINANTE_PAGING_BRINGUP) && defined(ROCINANTE_TLBR_UART_BREADCRUMBS)
+#if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)
 	li.d   $t3, UART16550_BASE
 	li.w   $t2, 'F'
 	st.b   $t2, $t3, 0

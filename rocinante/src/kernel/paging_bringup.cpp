@@ -9,6 +9,7 @@
 #include <src/memory/heap.h>
 #include <src/memory/paging.h>
 #include <src/memory/paging_hw.h>
+#include <src/memory/paging_state.h>
 #include <src/memory/pmm.h>
 #include <src/memory/virtual_layout.h>
 #include <src/platform/console.h>
@@ -36,13 +37,13 @@ extern "C" void __exception_entry();
 static std::uintptr_t g_paging_bringup_heap_virtual_base = 0;
 static std::size_t g_paging_bringup_heap_size_bytes = 0;
 
-// Post-paging self-check state.
+// Post-paging continuation.
 //
-// These values are recorded while paging is still disabled and the bootstrap
-// tables are being constructed. After paging is enabled, the higher-half
-// continuation uses them to run a software-walker self-check in mapped mode.
-static std::uintptr_t g_paging_bringup_root_pt_physical_address = 0;
-static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits{0, 0};
+// This is a function pointer to code within the kernel image. It is recorded
+// before paging is enabled (while code is executing in low/direct addressing),
+// then invoked after paging is enabled by jumping to the higher-half alias of
+// the same function.
+static std::uintptr_t g_post_paging_continuation_low = 0;
 
 [[noreturn]] [[gnu::noinline]] static void PagingBringup_HigherHalfStackContinuation() {
 	auto& uart = Rocinante::Platform::GetEarlyUart();
@@ -81,10 +82,11 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 	// Policy:
 	// - Relocate CSR.EENTRY/CSR.MERRENTRY to the higher-half alias.
 	// - Do not change CSR.TLBRENTRY here.
-	if (g_paging_bringup_address_bits.virtual_address_bits != 0) {
+	const Rocinante::Memory::PagingState* paging_state = Rocinante::Memory::TryGetPagingState();
+	if (paging_state && paging_state->address_bits.virtual_address_bits != 0) {
 		const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
 		const std::uintptr_t kernel_higher_half_base =
-			Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(g_paging_bringup_address_bits.virtual_address_bits);
+			Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(paging_state->address_bits.virtual_address_bits);
 		const std::uintptr_t exception_entry_low = reinterpret_cast<std::uintptr_t>(&__exception_entry);
 		const std::uintptr_t exception_entry_high = kernel_higher_half_base + (exception_entry_low - kernel_physical_base);
 
@@ -146,17 +148,17 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 	// Spec anchor:
 	// - LoongArch-Vol1-EN.html, Section 5.2: CRMD.DA/CRMD.PG select direct vs mapped
 	//   address translation mode.
-	if (g_paging_bringup_root_pt_physical_address != 0 && g_paging_bringup_address_bits.virtual_address_bits != 0) {
+	if (paging_state && paging_state->root.root_physical_address != 0 && paging_state->address_bits.virtual_address_bits != 0) {
 		const Rocinante::Memory::Paging::PageTableRoot root{
-			.root_physical_address = g_paging_bringup_root_pt_physical_address,
+			.root_physical_address = paging_state->root.root_physical_address,
 		};
 
 		const std::uintptr_t kernel_higher_half_base =
-			Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(g_paging_bringup_address_bits.virtual_address_bits);
+			Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(paging_state->address_bits.virtual_address_bits);
 		const std::uintptr_t physmap_root_virtual =
 			Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(
-				g_paging_bringup_root_pt_physical_address,
-				g_paging_bringup_address_bits.virtual_address_bits
+				paging_state->root.root_physical_address,
+				paging_state->address_bits.virtual_address_bits
 			);
 
 		uart.puts("Paging bring-up: post-paging Translate self-check\n");
@@ -167,7 +169,7 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 		uart.write_dec_u64(physmap_root_virtual);
 		uart.putc('\n');
 
-		const auto translated_hh = Rocinante::Memory::Paging::Translate(root, kernel_higher_half_base, g_paging_bringup_address_bits);
+		const auto translated_hh = Rocinante::Memory::Paging::Translate(root, kernel_higher_half_base, paging_state->address_bits);
 		uart.puts("Paging bring-up:   Translate(hh_base)=");
 		if (translated_hh.has_value()) {
 			uart.write_dec_u64(translated_hh.value());
@@ -176,7 +178,7 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 		}
 		uart.putc('\n');
 
-		const auto translated_physmap = Rocinante::Memory::Paging::Translate(root, physmap_root_virtual, g_paging_bringup_address_bits);
+		const auto translated_physmap = Rocinante::Memory::Paging::Translate(root, physmap_root_virtual, paging_state->address_bits);
 		uart.puts("Paging bring-up:   Translate(physmap(root_pt))=");
 		if (translated_physmap.has_value()) {
 			uart.write_dec_u64(translated_physmap.value());
@@ -185,11 +187,9 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 		}
 		uart.putc('\n');
 
-		#if defined(ROCINANTE_PAGING_IDENTITY_TEARDOWN_EXPERIMENT)
 		// ---------------------------------------------------------------------
-		// Bring-up experiment: tear down the low kernel identity mapping.
+		// Tear down the low kernel identity mapping.
 		//
-		// Hypothesis:
 		// After switching execution to the higher-half alias, the kernel should no
 		// longer require the low identity mapping of its own image.
 		//
@@ -200,15 +200,10 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 		// - Section 5.2 (Address Translation Mode): mapped mode uses the page-table
 		//   mappings; if we remove a mapping, accesses through that VA should fault.
 		//
-		// Minimal change:
+		// Policy:
 		// - Unmap the kernel's low identity range from the bootstrap page tables.
 		// - Flush TLB entries (INVTLB op=0).
 		// - Log software translations before/after as a sanity check.
-		//
-		// Keep-or-revert decision:
-		// - KEEP if the higher-half continuation keeps running and the low address
-		//   no longer translates.
-		// - REVERT if this produces no behavior change or prevents continued bring-up.
 		{
 			const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
 			const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
@@ -219,7 +214,7 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 				static_cast<std::size_t>((kernel_size_bytes + Rocinante::Memory::Paging::kPageSizeBytes - 1) &
 					~(Rocinante::Memory::Paging::kPageSizeBytes - 1));
 
-			uart.puts("Paging bring-up: identity teardown experiment enabled\n");
+			uart.puts("Paging bring-up: tearing down low kernel identity mapping\n");
 			uart.puts("Paging bring-up:   low kernel base=");
 			uart.write_dec_u64(kernel_physical_base);
 			uart.puts(" size_bytes=");
@@ -227,7 +222,7 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 			uart.putc('\n');
 
 			const auto translated_low_before =
-				Rocinante::Memory::Paging::Translate(root, kernel_physical_base, g_paging_bringup_address_bits);
+				Rocinante::Memory::Paging::Translate(root, kernel_physical_base, paging_state->address_bits);
 			uart.puts("Paging bring-up:   Translate(low_kernel_base) before=");
 			if (translated_low_before.has_value()) {
 				uart.write_dec_u64(translated_low_before.value());
@@ -242,7 +237,7 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 				for (std::size_t offset_bytes = 0; offset_bytes < map_size_rounded; offset_bytes += Rocinante::Memory::Paging::kPageSizeBytes) {
 					const std::uintptr_t low_virtual_page_base =
 						kernel_physical_base + static_cast<std::uintptr_t>(offset_bytes);
-					(void)Rocinante::Memory::Paging::UnmapPage4KiB(root, low_virtual_page_base, g_paging_bringup_address_bits);
+					(void)Rocinante::Memory::Paging::UnmapPage4KiB(root, low_virtual_page_base, paging_state->address_bits);
 				}
 
 				uart.puts("Paging bring-up:   INVTLB op=0 (flush all)\n");
@@ -250,7 +245,7 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 			}
 
 			const auto translated_low_after =
-				Rocinante::Memory::Paging::Translate(root, kernel_physical_base, g_paging_bringup_address_bits);
+				Rocinante::Memory::Paging::Translate(root, kernel_physical_base, paging_state->address_bits);
 			uart.puts("Paging bring-up:   Translate(low_kernel_base) after=");
 			if (translated_low_after.has_value()) {
 				uart.write_dec_u64(translated_low_after.value());
@@ -259,11 +254,56 @@ static Rocinante::Memory::Paging::AddressSpaceBits g_paging_bringup_address_bits
 			}
 			uart.putc('\n');
 
-			uart.puts("Paging bring-up: identity teardown experiment complete\n");
+			uart.puts("Paging bring-up: low kernel identity mapping torn down\n");
 		}
-		#endif
 	} else {
 		uart.puts("Paging bring-up: post-paging Translate self-check skipped (no root/address_bits)\n");
+	}
+
+	// Transfer control to the caller-supplied continuation.
+	//
+	// Goal:
+	// This is the bridge from "paging bring-up" to "normal kernel execution".
+	// We keep all existing bring-up self-checks above, then hand off to the
+	// kernel proper in mapped mode.
+	//
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Section 7.5.6 (PGDH): the higher half is selected when VA[VALEN-1]==1.
+	//   We therefore jump to a higher-half alias of the continuation.
+	if (g_post_paging_continuation_low != 0 && paging_state && paging_state->address_bits.virtual_address_bits != 0) {
+		const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+		const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+		const std::uintptr_t continuation_low = g_post_paging_continuation_low;
+
+		if (continuation_low < kernel_physical_base || continuation_low >= kernel_physical_end) {
+			uart.puts("Paging bring-up: post-paging continuation is outside kernel image; refusing to jump\n");
+			uart.puts("Paging bring-up:   kernel_phys=[");
+			uart.write_dec_u64(kernel_physical_base);
+			uart.puts(", ");
+			uart.write_dec_u64(kernel_physical_end);
+			uart.puts(") continuation_low=");
+			uart.write_dec_u64(continuation_low);
+			uart.putc('\n');
+			Rocinante::Platform::Halt();
+		}
+
+		const std::uintptr_t kernel_higher_half_base =
+			Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(paging_state->address_bits.virtual_address_bits);
+		const std::uintptr_t continuation_offset = continuation_low - kernel_physical_base;
+		const std::uintptr_t continuation_high = kernel_higher_half_base + continuation_offset;
+
+		uart.puts("Paging bring-up: transferring control to mapped continuation target=");
+		uart.write_dec_u64(continuation_high);
+		uart.putc('\n');
+
+		asm volatile(
+			"jirl $zero, %0, 0\n"
+			"break 0\n"
+			:
+			: "r"(continuation_high)
+			: "memory"
+		);
+		__builtin_unreachable();
 	}
 
 	auto& cpucfg = Rocinante::GetCPUCFG();
@@ -299,9 +339,14 @@ void RunPagingBringup(
 	Rocinante::Uart16550& uart,
 	Rocinante::Memory::PhysicalMemoryManager& pmm,
 	std::uintptr_t kernel_physical_base,
-	std::uintptr_t kernel_physical_end
+	std::uintptr_t kernel_physical_end,
+	void (*post_paging_continuation)()
 ) {
 	uart.puts("\nPaging bring-up: building bootstrap page tables\n");
+
+	// The continuation must live within the kernel image so we can jump to a
+	// higher-half alias of it after paging is enabled.
+	g_post_paging_continuation_low = reinterpret_cast<std::uintptr_t>(post_paging_continuation);
 
 	const std::uint32_t virtual_address_bits = Rocinante::GetCPUCFG().VirtualAddressBits();
 	const std::uint32_t physical_address_bits = Rocinante::GetCPUCFG().PhysicalAddressBits();
@@ -370,8 +415,10 @@ void RunPagingBringup(
 		return;
 	}
 	const auto root = root_or.value();
-	g_paging_bringup_root_pt_physical_address = root.root_physical_address;
-	g_paging_bringup_address_bits = address_bits;
+	Rocinante::Memory::InitializePagingState(Rocinante::Memory::PagingState{
+		.root = root,
+		.address_bits = address_bits,
+	});
 
 	// Identity-map the kernel image so enabling paging does not immediately
 	// fault while executing in the low physical mapping.

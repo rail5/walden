@@ -81,6 +81,39 @@ static void PrintCpuArchitecture(const Rocinante::Uart16550& uart, Rocinante::CP
 	uart.putc('\n');
 }
 
+[[noreturn]] static void KernelMain_PostMemoryInitialization() {
+	auto& uart = Rocinante::Platform::GetEarlyUart();
+	auto& cpucfg = Rocinante::GetCPUCFG();
+
+	uart.puts("Hello, Rocinante!\n");
+	uart.puts("Don the LoongArch64 armor and prepare to ride!\n\n");
+
+	PrintCpuArchitecture(uart, cpucfg.Arch());
+
+	uart.putc('\n');
+
+	if (cpucfg.MMUSupportsPageMappingMode()) {
+		uart.puts("MMU supports page mapping mode\n");
+	} else {
+		uart.puts("MMU does not support page mapping mode\n");
+	}
+
+	uart.putc('\n');
+
+	// Let's read and print VALEN/PALEN as a sanity check that our CPUCFG class is
+	// working and we can read CPU-reported information correctly.
+	uart.puts("Supported virtual address bits (VALEN): ");
+	uart.write_dec_u64(cpucfg.VirtualAddressBits());
+	uart.putc('\n');
+	uart.puts("Supported physical address bits (PALEN): ");
+	uart.write_dec_u64(cpucfg.PhysicalAddressBits());
+	uart.putc('\n');
+
+	uart.putc('\n');
+
+	Rocinante::Platform::Halt();
+}
+
 } // namespace
 
 extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv, std::uint64_t kernel_cmdline_ptr, std::uint64_t boot_info_ptr_a2) {
@@ -148,19 +181,19 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 			)) {
 				Rocinante::Boot::PrintPhysicalMemoryManagerSummary(uart, pmm);
 
-				// Paging bring-up is intentionally compile-time gated.
+				// Paging is now the default boot path.
 				//
-				// Flaw / bring-up gap:
-				//   LoongArch privileged spec end-to-end.
-				// - We do not yet establish a higher-half kernel. We do, however, build a
-				//   minimal higher-half physmap so future paging code can access physical
-				//   frames via a stable VA once paging is enabled.
-				// - ROCINANTE_PAGING_BRINGUP enables the end-to-end switch into mapped mode.
-				//   If we want a "build tables only" diagnostic build again, we can
-				//   reintroduce a separate flag once the end-to-end path is stable.
-				#if defined(ROCINANTE_PAGING_BRINGUP)
-				Rocinante::Kernel::RunPagingBringup(uart, pmm, kernel_physical_base, kernel_physical_end);
-				#endif
+				// Policy:
+				// - Build bootstrap page tables.
+				// - Switch into mapped address translation mode.
+				// - Jump to the higher-half alias and continue normal kernel execution.
+				Rocinante::Kernel::RunPagingBringup(
+					uart,
+					pmm,
+					kernel_physical_base,
+					kernel_physical_end,
+					&KernelMain_PostMemoryInitialization
+				);
 			} else {
 				uart.puts("Failed to initialize PMM from boot memory map\n");
 			}
@@ -171,32 +204,5 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 		uart.puts("No DTB detected; skipping boot memory map parse\n");
 	}
 
-	auto& cpucfg = Rocinante::GetCPUCFG();
-
-	uart.puts("Hello, Rocinante!\n");
-	uart.puts("Don the LoongArch64 armor and prepare to ride!\n\n");
-
-	PrintCpuArchitecture(uart, cpucfg.Arch());
-
-	uart.putc('\n');
-
-	if (cpucfg.MMUSupportsPageMappingMode()) {
-		uart.puts("MMU supports page mapping mode\n");
-	} else {
-		uart.puts("MMU does not support page mapping mode\n");
-	}
-
-	uart.putc('\n');
-
-	// Let's read and print VALEN/PALEN as a sanity check that our CPUCFG class is working and we can read CPU-reported information correctly.
-	uart.puts("Supported virtual address bits (VALEN): ");
-	uart.write_dec_u64(cpucfg.VirtualAddressBits());
-	uart.putc('\n');
-	uart.puts("Supported physical address bits (PALEN): ");
-	uart.write_dec_u64(cpucfg.PhysicalAddressBits());
-	uart.putc('\n');
-
-	uart.putc('\n');
-
-	Rocinante::Platform::Halt();
+	KernelMain_PostMemoryInitialization();
 }
