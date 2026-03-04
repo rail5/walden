@@ -495,7 +495,7 @@ __tlb_refill_entry:
 	add.d  $t3, $t0, $t3
 	ld.d   $t3, $t3, 0
 	li.d   $t0, PAGE_BASE_MASK
-	and    $t0, $t3, $t2
+	and    $t0, $t3, $t0
 1:
 
 #if defined(ROCINANTE_TLBREFILL_UART_BREADCRUMBS)

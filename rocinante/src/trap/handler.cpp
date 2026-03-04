@@ -73,6 +73,61 @@ static void DumpTlbRefillCsrsIfActive(const Rocinante::Uart16550& uart) {
 	uart.puts("TLBREHI:  "); uart.write_hex_u64(tlbrehi); uart.putc('\n');
 }
 
+static const char* ExceptionCodeName(std::uint64_t exception_code, bool is_tlbr) {
+	// LoongArch Vol.1: Table 21 (Table of exception encoding).
+	if (is_tlbr) return "TLBR";
+
+	switch (exception_code) {
+		case 0x1: return "PIL";
+		case 0x2: return "PIS";
+		case 0x3: return "PIF";
+		case 0x4: return "PME";
+		case 0x5: return "PNR";
+		case 0x6: return "PNX";
+		case 0x7: return "PPI";
+		default: return nullptr;
+	}
+}
+
+static bool IsPagingException(std::uint64_t exception_code) {
+	// LoongArch Vol.1: Table 21 (Table of exception encoding).
+	// Page-fault-related ecodes occupy the contiguous range [0x1, 0x7].
+	return exception_code >= 0x1 && exception_code <= 0x7;
+}
+
+static const char* PagingAccessTypeNameOrNull(std::uint64_t exception_code) {
+	// LoongArch Vol.1: Table 21 (Table of exception encoding).
+	// - 0x1 PIL: page invalid for load
+	// - 0x2 PIS: page invalid for store
+	// - 0x3 PIF: page invalid for fetch
+	switch (exception_code) {
+		case 0x1: return "load";
+		case 0x2: return "store";
+		case 0x3: return "fetch";
+		default: return nullptr;
+	}
+}
+
+static Rocinante::Trap::PagingAccessType PagingAccessTypeFromExceptionCode(std::uint64_t exception_code) {
+	// LoongArch Vol.1: Table 21 (Table of exception encoding).
+	// - 0x1 PIL: page invalid for load
+	// - 0x2 PIS: page invalid for store
+	// - 0x3 PIF: page invalid for fetch
+	switch (exception_code) {
+		case 0x1: return Rocinante::Trap::PagingAccessType::Load;
+		case 0x2: return Rocinante::Trap::PagingAccessType::Store;
+		case 0x3: return Rocinante::Trap::PagingAccessType::Fetch;
+		default: return Rocinante::Trap::PagingAccessType::Unknown;
+	}
+}
+
+static std::uint64_t CurrentPrivilegeLevelFromCrmd(std::uint64_t crmd) {
+	// LoongArch Vol.1: Section 7.4.1 (CRMD), Table 15.
+	// CSR.CRMD.PLV is bits [1:0], legal values 0..3.
+	static constexpr std::uint64_t kCrmdPrivilegeLevelMask = 0x3;
+	return crmd & kCrmdPrivilegeLevelMask;
+}
+
 } // namespace
 
 extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
@@ -84,6 +139,30 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 		Rocinante::Trap::ExceptionSubCodeFromExceptionStatus(tf->exception_status);
 	const std::uint64_t interrupt_status =
 		Rocinante::Trap::InterruptStatusFromExceptionStatus(tf->exception_status);
+
+	// Page-fault dispatch hook (mechanism), independent of policy.
+	//
+	// Note: In ROCINANTE_TESTS builds, the test harness can early-return from the
+	// trap handler. Dispatch must run before that so tests can validate the hook.
+	const bool is_tlbr = (ReadCsr<Csr::kTlbRefillExceptionReturnAddress>() & 1ull) != 0;
+	const bool is_paging_exception = (!is_tlbr) && IsPagingException(exception_code);
+	if (is_paging_exception) {
+		const std::uint64_t current_plv = CurrentPrivilegeLevelFromCrmd(tf->current_mode_information);
+		const Rocinante::Trap::PagingFaultEvent event{
+			.exception_code = exception_code,
+			.exception_subcode = exception_subcode,
+			.exception_return_address = tf->exception_return_address,
+			.bad_virtual_address = tf->bad_virtual_address,
+			.current_mode_information = tf->current_mode_information,
+			.previous_mode_information = tf->previous_mode_information,
+			.current_privilege_level = current_plv,
+			.access_type = PagingAccessTypeFromExceptionCode(exception_code),
+		};
+
+		if (Rocinante::Trap::DispatchPagingFault(*tf, event) == Rocinante::Trap::PagingFaultResult::Handled) {
+			return;
+		}
+	}
 
 	#if defined(ROCINANTE_TESTS)
 	if (Rocinante::Testing::HandleTrap(tf, exception_code, exception_subcode, interrupt_status)) {
@@ -120,10 +199,37 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	}
 	#endif
 
-	uart.puts("\n*** TRAP ***\n");
+	const char* exception_code_name = ExceptionCodeName(exception_code, is_tlbr);
+	if (is_paging_exception) {
+		uart.puts("\n*** PAGE FAULT ***\n");
+	} else {
+		uart.puts("\n*** TRAP ***\n");
+	}
+
 	uart.puts("EXC="); uart.write_hex_u64(exception_code);
+	if (exception_code_name != nullptr) {
+		uart.puts(" (");
+		uart.puts(exception_code_name);
+		uart.puts(")");
+	}
 	uart.puts(" SUB="); uart.write_hex_u64(exception_subcode);
 	uart.puts("\n");
+
+	if (is_paging_exception) {
+		const std::uint64_t current_plv = CurrentPrivilegeLevelFromCrmd(tf->current_mode_information);
+		uart.puts("CRMD.PLV (current privilege level): ");
+		uart.write_dec_u64(current_plv);
+		uart.putc('\n');
+
+		const char* access_type = PagingAccessTypeNameOrNull(exception_code);
+		if (access_type != nullptr) {
+			uart.puts("Paging access type: ");
+			uart.puts(access_type);
+			uart.putc('\n');
+		}
+
+		uart.puts("Fault policy: HALT (no recovery implemented)\n");
+	}
 
 	uart.puts("CSR.ERA (exception return address): ");
 	uart.write_hex_u64(tf->exception_return_address);

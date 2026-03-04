@@ -88,9 +88,20 @@ static inline void ClearPendingTimerInterruptInCsr() {
 extern "C" void __exception_entry();
 extern "C" void __tlb_refill_entry();
 
+static Rocinante::Trap::PagingFaultObserver g_paging_fault_observer = nullptr;
+
 } // namespace
 
 namespace Rocinante::Trap {
+
+void SetPagingFaultObserver(PagingFaultObserver observer) {
+	g_paging_fault_observer = observer;
+}
+
+PagingFaultResult DispatchPagingFault(TrapFrame& tf, const PagingFaultEvent& event) {
+	if (g_paging_fault_observer == nullptr) return PagingFaultResult::NotHandled;
+	return g_paging_fault_observer(tf, event);
+}
 
 void Initialize() {
 	// Use a unified entry point (ECFG.VS = 0).

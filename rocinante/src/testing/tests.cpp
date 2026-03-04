@@ -47,6 +47,30 @@ static std::uint8_t g_paging_hw_physical_address_bits = 0;
 static std::uintptr_t g_paging_hw_higher_half_stack_guard_virtual_base = 0;
 static std::uintptr_t g_paging_hw_higher_half_stack_top = 0;
 
+static std::uint64_t g_paging_fault_observer_invocation_count = 0;
+static std::uint64_t g_paging_fault_observer_last_exception_code = 0;
+static std::uint64_t g_paging_fault_observer_last_bad_virtual_address = 0;
+static std::uint64_t g_paging_fault_observer_last_current_privilege_level = 0;
+static Rocinante::Trap::PagingAccessType g_paging_fault_observer_last_access_type = Rocinante::Trap::PagingAccessType::Unknown;
+
+static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestProbe(
+	Rocinante::TrapFrame& tf,
+	const Rocinante::Trap::PagingFaultEvent& event
+) {
+	// Record observation for the test to assert after returning.
+	g_paging_fault_observer_invocation_count++;
+	g_paging_fault_observer_last_exception_code = event.exception_code;
+	g_paging_fault_observer_last_bad_virtual_address = event.bad_virtual_address;
+	g_paging_fault_observer_last_current_privilege_level = event.current_privilege_level;
+	g_paging_fault_observer_last_access_type = event.access_type;
+
+	// Handle by skipping the faulting instruction.
+	// LoongArch instructions are 32-bit.
+	static constexpr std::uint64_t kInstructionSizeBytes = 4;
+	tf.exception_return_address += kInstructionSizeBytes;
+	return Rocinante::Trap::PagingFaultResult::Handled;
+}
+
 extern "C" void RocinanteTesting_SwitchStackAndStore(
 	std::uintptr_t new_stack_pointer,
 	std::uintptr_t store_address,
@@ -1218,6 +1242,57 @@ static void Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV(TestContext* ctx) 
 	ROCINANTE_EXPECT_EQ_U64(ctx, ExpectedTrapBadVaddr(), kFaultVirtualAddress);
 }
 
+static void Test_PagingHw_PagingFaultObserver_DispatchesAndCanHandle(TestContext* ctx) {
+	// This test runs after paging has been enabled.
+	// It installs a paging-fault observer and asserts that:
+	// - the observer is invoked for a paging exception, and
+	// - returning Handled can resume execution (by advancing ERA).
+
+	// LoongArch EXCCODE values (Table 21):
+	// - 0x1 => PIL: page invalid for load
+	static constexpr std::uint64_t kExceptionCodePil = 0x1;
+
+	// Sanity check: paging must be enabled (CRMD.PG=1, CRMD.DA=0).
+	static constexpr std::uint32_t kCsrCrmd = 0x0;
+	static constexpr std::uint64_t kCrmdPagingEnable = (1ull << 4);
+	static constexpr std::uint64_t kCrmdDirectAddressingEnable = (1ull << 3);
+	std::uint64_t crmd = 0;
+	asm volatile("csrrd %0, %1" : "=r"(crmd) : "i"(kCsrCrmd));
+	if ((crmd & kCrmdPagingEnable) == 0 || (crmd & kCrmdDirectAddressingEnable) != 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	// Use the same provably-unmapped scratch-adjacent page as the unmapped-access test.
+	static constexpr std::uintptr_t kFaultVirtualAddress =
+		kPagingHwScratchVirtualPageBase + Rocinante::Memory::Paging::kPageSizeBytes;
+	static_assert((kFaultVirtualAddress % Rocinante::Memory::Paging::kPageSizeBytes) == 0);
+
+	// Reset observations and install observer.
+	g_paging_fault_observer_invocation_count = 0;
+	g_paging_fault_observer_last_exception_code = 0;
+	g_paging_fault_observer_last_bad_virtual_address = 0;
+	g_paging_fault_observer_last_current_privilege_level = 0;
+	g_paging_fault_observer_last_access_type = Rocinante::Trap::PagingAccessType::Unknown;
+
+	Rocinante::Trap::SetPagingFaultObserver(&PagingFaultObserver_TestProbe);
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+
+	// Trigger an unmapped load. The observer handles the fault by skipping the instruction.
+	std::uint64_t tmp = 0;
+	asm volatile("ld.d %0, %1, 0" : "=r"(tmp) : "r"(kFaultVirtualAddress) : "memory");
+
+	// Always clear the observer so later tests keep their existing behavior.
+	Rocinante::Trap::SetPagingFaultObserver(nullptr);
+
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_invocation_count, 1);
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_last_exception_code, kExceptionCodePil);
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_last_bad_virtual_address, kFaultVirtualAddress);
+	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_observer_last_current_privilege_level, 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, static_cast<std::uint64_t>(g_paging_fault_observer_last_access_type),
+		static_cast<std::uint64_t>(Rocinante::Trap::PagingAccessType::Load));
+}
+
 } // namespace
 
 extern const TestCase g_test_cases[] = {
@@ -1236,6 +1311,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.PMM.Initialize.SingleUsableRegionContainingKernelAndDTB", &Test_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB},
 	{"Memory.PagingHw.EnablePaging.TlbRefillSmoke", &Test_PagingHw_EnablePaging_TlbRefillSmoke},
 	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &Test_PagingHw_UnmappedAccess_FaultsAndReportsBadV},
+	{"Memory.PagingHw.PagingFaultObserver.DispatchesAndCanHandle", &Test_PagingHw_PagingFaultObserver_DispatchesAndCanHandle},
 	{"Memory.PagingHw.PostPaging.MapUnmap.Faults", &Test_PagingHw_PostPaging_MapUnmap_Faults},
 	{"Memory.PagingHw.HigherHalfStack.GuardPageFaults", &Test_PagingHw_HigherHalfStack_GuardPageFaults},
 };

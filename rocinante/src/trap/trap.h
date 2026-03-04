@@ -52,6 +52,56 @@ static_assert(sizeof(TrapFrame) == kTrapFrameSizeBytes);
 namespace Trap {
 
 /**
+ * @brief Categorizes the access type that triggered a paging exception.
+ *
+ * Spec anchor (LoongArch-Vol1-EN.html):
+ * - Vol.1 Table 21 (Table of exception encoding):
+ *   - PIL: page invalid for load
+ *   - PIS: page invalid for store
+ *   - PIF: page invalid for fetch
+ */
+enum class PagingAccessType : std::uint8_t {
+	Unknown = 0,
+	Fetch,
+	Load,
+	Store,
+};
+
+/**
+ * @brief Structured information about a paging exception.
+ *
+ * This is intended as a stable, minimal contract for future microkernel-style
+ * fault delivery (e.g. user-mode faults forwarded to a pager server), while
+ * preserving the current early-bringup policy (log + halt) by default.
+ */
+struct PagingFaultEvent final {
+	std::uint64_t exception_code;
+	std::uint64_t exception_subcode;
+	std::uint64_t exception_return_address;
+	std::uint64_t bad_virtual_address;
+	std::uint64_t current_mode_information;
+	std::uint64_t previous_mode_information;
+	std::uint64_t current_privilege_level;
+	PagingAccessType access_type;
+};
+
+enum class PagingFaultResult : std::uint8_t {
+	NotHandled = 0,
+	Handled,
+};
+
+using PagingFaultObserver = PagingFaultResult (*)(TrapFrame& tf, const PagingFaultEvent& event);
+
+// Installs a global observer for paging exceptions. Passing nullptr clears it.
+void SetPagingFaultObserver(PagingFaultObserver observer);
+
+// Dispatches a paging exception to the installed observer (if any).
+//
+// If the observer returns Handled, the caller may return from the trap handler
+// and retry the faulting instruction after the observer has repaired state.
+PagingFaultResult DispatchPagingFault(TrapFrame& tf, const PagingFaultEvent& event);
+
+/**
  * @brief Installs exception/interrupt entry points into the relevant CSRs.
  *
  * Current policy:
