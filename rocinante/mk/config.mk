@@ -4,7 +4,7 @@ TARGET_TRIPLE ?= loongarch64-linux-gnu
 CC            := clang
 CXX           := clang++
 LD            := $(CXX)
-CFLAGS        := --target=$(TARGET_TRIPLE) -ffreestanding -nostdlib -fno-asynchronous-unwind-tables -fno-pic -fno-jump-tables -mno-lsx -mno-lasx -fno-vectorize -fno-slp-vectorize -Wall -Wextra -O2 -I$(PROJECT_ROOT_DIRECTORY)
+CFLAGS        := --target=$(TARGET_TRIPLE) -ffreestanding -nostdlib -fno-asynchronous-unwind-tables -fno-pic -fno-jump-tables -mno-lsx -mno-lasx -fno-vectorize -fno-slp-vectorize -Wall -Wextra -O2 -I$(PROJECT_ROOT_DIRECTORY) -MMD -MP
 CXXFLAGS      := $(CFLAGS) -fno-exceptions -fno-rtti -std=gnu++23
 LDFLAGS       := --target=$(TARGET_TRIPLE) -fuse-ld=lld -nostdlib -static -Wl,-no-pie -Wl,-T,$(LINKER_LD) -Wl,-s
 
@@ -31,7 +31,7 @@ endif
 # Policy:
 # Any change to the effective compiler/linker flags must trigger a rebuild of
 # all objects.
-FLAGS_STAMP = $(BINDIR)/.build-flags
+FLAGS_STAMP := $(BINDIR)/.build-flags
 
 $(FLAGS_STAMP):
 	@mkdir -p $(BINDIR)
