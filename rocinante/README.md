@@ -23,3 +23,11 @@ You can run the tests with `make test`. This will build a *test version* of the 
 ### Build Requirements
 
 TBD. The dev environment uses Clang/LLVM 21 on Debian. Earlier versions might be fine but I haven't checked.
+
+## Editor / clangd
+
+This repo is set up so clangd/clang-tidy can resolve repo-local includes.
+
+- `compile_flags.txt` in the repo root provides a stable fallback compile command rooted at the workspace.
+- For the best results (accurate per-file flags/defines), generate a compilation database:
+	- From the repo root: `make compdb` (requires `bear`).

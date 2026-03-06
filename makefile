@@ -12,4 +12,8 @@ clean:
 	@echo "Cleaning build artifacts..."
 	@$(MAKE) -C rocinante clean
 
-.PHONY: all kernel run clean
+compdb:
+	@echo "Generating compile_commands.json (requires 'bear')..."
+	@$(MAKE) -C rocinante compdb
+
+.PHONY: all kernel run clean compdb

@@ -1,0 +1,10 @@
+-std=gnu++23
+-ffreestanding
+-fno-exceptions
+-fno-rtti
+-Wno-unsafe-buffer-usage
+-Wno-reserved-identifier
+-Wno-missing-prototypes
+-Wno-padded
+-I.
+-Irocinante

@@ -167,6 +167,15 @@ clean:
 	@find $(BINDIR) -mindepth 1 -type d -empty -delete
 	@echo "Cleaned build artifacts."
 
+# Generate a compilation database for clangd/clang-tidy.
+# Requires: `bear`
+compdb:
+	@command -v bear >/dev/null 2>&1 || (\
+		echo "ERROR: Missing 'bear'. Install it (e.g. apt install bear)"; \
+		exit 1)
+	@rm -f $(PROJECT_ROOT_DIRECTORY)/../compile_commands.json
+	@bear --output $(PROJECT_ROOT_DIRECTORY)/../compile_commands.json -- $(MAKE) clean all
+
 run: $(TARGET)
 	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
 		-monitor none -kernel $<
@@ -220,4 +229,4 @@ audit-abs-ptrs:
 	fi; \
 	exit $$fail
 
-.PHONY: all check-toolchain clean run run-serial test run-tests audit-abs-ptrs
+.PHONY: all check-toolchain clean run run-serial test run-tests audit-abs-ptrs compdb
