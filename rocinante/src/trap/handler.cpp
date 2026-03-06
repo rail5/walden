@@ -100,10 +100,12 @@ static const char* PagingAccessTypeNameOrNull(std::uint64_t exception_code) {
 	// - 0x1 PIL: page invalid for load
 	// - 0x2 PIS: page invalid for store
 	// - 0x3 PIF: page invalid for fetch
+	// - 0x6 PNX: page non-executable exception
 	switch (exception_code) {
 		case 0x1: return "load";
 		case 0x2: return "store";
 		case 0x3: return "fetch";
+		case 0x6: return "fetch";
 		default: return nullptr;
 	}
 }
@@ -113,10 +115,12 @@ static Rocinante::Trap::PagingAccessType PagingAccessTypeFromExceptionCode(std::
 	// - 0x1 PIL: page invalid for load
 	// - 0x2 PIS: page invalid for store
 	// - 0x3 PIF: page invalid for fetch
+	// - 0x6 PNX: page non-executable exception
 	switch (exception_code) {
 		case 0x1: return Rocinante::Trap::PagingAccessType::Load;
 		case 0x2: return Rocinante::Trap::PagingAccessType::Store;
 		case 0x3: return Rocinante::Trap::PagingAccessType::Fetch;
+		case 0x6: return Rocinante::Trap::PagingAccessType::Fetch;
 		default: return Rocinante::Trap::PagingAccessType::Unknown;
 	}
 }
