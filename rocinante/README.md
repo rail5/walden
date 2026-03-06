@@ -10,4 +10,16 @@
 
 Rocinante is the kernel of the Walden operating system. It is a microkernel written in C++23 (GNU dialect) and built with Clang/LLVM for the LoongArch64 architecture.
 
-Build instructions TBD
+## Building and Running
+
+**NOTE**: Upstream QEMU has some accuracy bugs in its LoongArch64 emulation. I have submitted patches to fix these, but before they're merged, you can build my [patched version of QEMU](https://github.com/rail5/qemu) to get correct behavior. Rocinante may not run correctly on unpatched QEMU.
+
+To build Rocinante, run `make` in this directory. The resulting kernel image will be located at `bin/rocinante.elf`.
+
+To run Rocinante in QEMU, use `make run` for a graphical session or `make run-serial` for a serial console session.
+
+You can run the tests with `make test`. This will build a *test version* of the kernel (i.e., a version that does not fully boot, but just runs the tests) and run it in QEMU via `run-serial`. The test output will be printed to the console.
+
+### Build Requirements
+
+TBD. The dev environment uses Clang/LLVM 21 on Debian. Earlier versions might be fine but I haven't checked.
