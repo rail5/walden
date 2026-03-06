@@ -1644,6 +1644,9 @@ static void Test_PagingHw_NonExecutableFetch_RaisesPnx(TestContext* ctx) {
 	// If EP=0, NX may be ignored/cleared by the CPU (or emulator), so this test
 	// is not applicable.
 	if (!Rocinante::GetCPUCFG().SupportsExecProtection()) {
+		// Output a warning instead of a failure since this is a platform limitation, not a test failure.
+		Rocinante::Testing::Warn(ctx, __FILE__, __LINE__,
+			"CPU does not support execution protection (CPUCFG.EP=0); skipping non-executable fetch test");
 		return;
 	}
 

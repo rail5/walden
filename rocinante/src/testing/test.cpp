@@ -166,6 +166,18 @@ void Fail(TestContext* ctx, const char* file, int line, const char* message) {
 	Print(ctx, ")\n");
 }
 
+void Warn(TestContext* ctx, const char* file, int line, const char* message) {
+	Print(ctx, "WARNING [");
+	Print(ctx, ctx->current_test_name ? ctx->current_test_name : "<unknown>");
+	Print(ctx, "] ");
+	Print(ctx, message);
+	Print(ctx, " (at ");
+	Print(ctx, file);
+	Print(ctx, ":");
+	PrintU64(ctx, static_cast<std::uint64_t>(line));
+	Print(ctx, ")\n");
+}
+
 void ExpectTrue(TestContext* ctx, bool value, const char* expr_text, const char* file, int line) {
 	if (value) return;
 	Fail(ctx, file, line, expr_text);

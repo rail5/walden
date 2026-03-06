@@ -91,6 +91,9 @@ std::uint64_t ExpectedTrapBadVaddr();
 // failures in one run.
 void Fail(TestContext* ctx, const char* file, int line, const char* message);
 
+// Output a warning without marking the test as failed.
+void Warn(TestContext* ctx, const char* file, int line, const char* message);
+
 void ExpectTrue(TestContext* ctx, bool value, const char* expr_text, const char* file, int line);
 
 void ExpectEqU64(
