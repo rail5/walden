@@ -17,8 +17,7 @@ run-serial: $(TARGET)
 		-kernel $<
 
 test:
-	@$(MAKE) -C $(PROJECT_ROOT_DIRECTORY) ROCINANTE_TESTS=1 MAKEFLAGS= clean all
-	@$(MAKE) -C $(PROJECT_ROOT_DIRECTORY) ROCINANTE_TESTS=1 MAKEFLAGS= run-serial
+	@$(MAKE) -C $(PROJECT_ROOT_DIRECTORY) ROCINANTE_TESTS=1 MAKEFLAGS= clean all run-serial
 
 # Audit for absolute-address pointer tables.
 #
