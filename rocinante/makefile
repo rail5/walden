@@ -71,7 +71,7 @@ KERNEL_OBJS = $(patsubst $(KERNEL_SRCDIR)/%.cpp, $(KERNEL_OBJDIR)/%.o, $(KERNEL_
 TRAP_SRCS  = $(wildcard $(TRAP_SRCDIR)/*.cpp)
 TRAP_OBJS  = $(patsubst $(TRAP_SRCDIR)/%.cpp, $(TRAP_OBJDIR)/%.o, $(TRAP_SRCS))
 
-TEST_SRCS  = $(wildcard $(TEST_SRCDIR)/*.cpp)
+TEST_SRCS  = $(shell find $(TEST_SRCDIR) -type f -name '*.cpp')
 TEST_OBJS  = $(patsubst $(TEST_SRCDIR)/%.cpp, $(TEST_OBJDIR)/%.o, $(TEST_SRCS))
 
 ALL_OBJS   = $(ASM_OBJS) $(ABI_OBJ) $(SP_OBJS) $(MEM_OBJS) $(PLATFORM_OBJS) $(BOOT_OBJS) $(TRAP_OBJS) $(KERNEL_OBJS)
@@ -155,7 +155,7 @@ $(KERNEL_OBJDIR)/%.o: $(KERNEL_SRCDIR)/%.cpp $(FLAGS_STAMP)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(TEST_OBJDIR)/%.o: $(TEST_SRCDIR)/%.cpp $(FLAGS_STAMP)
-	@mkdir -p $(TEST_OBJDIR)
+	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $(ABI_OBJ): $(ABI_SRC) $(FLAGS_STAMP)
