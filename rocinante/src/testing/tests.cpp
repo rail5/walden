@@ -17,6 +17,7 @@ void TestEntry_Paging_MapTranslateUnmap(TestContext* ctx);
 void TestEntry_Paging_RespectsVALENAndPALEN(TestContext* ctx);
 void TestEntry_Paging_Physmap_MapsRootPageTableAndAttributes(TestContext* ctx);
 void TestEntry_Paging_UnmapReclaimsIntermediateTables(TestContext* ctx);
+void TestEntry_Paging_MapCount_TracksLeafMappings(TestContext* ctx);
 void TestEntry_AddressSpace_DestroyPageTables_FreesRootAndSubtables(TestContext* ctx);
 
 void TestEntry_KernelVirtualAddressAllocator_AllocateFreeCoalesce(TestContext* ctx);
@@ -32,6 +33,7 @@ void TestEntry_PMM_DoesNotClobberReservedDuringBitmapPlacement(TestContext* ctx)
 void TestEntry_PMM_ClampsTrackedRangeToPALEN(TestContext* ctx);
 void TestEntry_PMM_BitmapPlacement_RespectsPALEN(TestContext* ctx);
 void TestEntry_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(TestContext* ctx);
+void TestEntry_PMM_PageFrameNumberConversions(TestContext* ctx);
 
 void TestEntry_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx);
 void TestEntry_PagingHw_UnmappedAccess_FaultsAndReportsBadV(TestContext* ctx);
@@ -50,6 +52,7 @@ extern const TestCase g_test_cases[] = {
 	{"Traps.INE.UndefinedInstruction.IsObserved", &TestEntry_Traps_INE_UndefinedInstruction_IsObserved},
 	{"Interrupts.TimerIRQ.DeliversAndClears", &TestEntry_Interrupts_TimerIRQ_DeliversAndClears},
 	{"Memory.Paging.MapTranslateUnmap", &TestEntry_Paging_MapTranslateUnmap},
+	{"Memory.Paging.MapCount.TracksLeafMappings", &TestEntry_Paging_MapCount_TracksLeafMappings},
 	{"Memory.Paging.RespectsVALENAndPALEN", &TestEntry_Paging_RespectsVALENAndPALEN},
 	{"Memory.Paging.Physmap.MapsRootAndAttributes", &TestEntry_Paging_Physmap_MapsRootPageTableAndAttributes},
 	{"Memory.Paging.UnmapReclaimsIntermediateTables", &TestEntry_Paging_UnmapReclaimsIntermediateTables},
@@ -65,6 +68,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.PMM.ClampsTrackedRangeToPALEN", &TestEntry_PMM_ClampsTrackedRangeToPALEN},
 	{"Memory.PMM.BitmapPlacement.RespectsPALEN", &TestEntry_PMM_BitmapPlacement_RespectsPALEN},
 	{"Memory.PMM.Initialize.SingleUsableRegionContainingKernelAndDTB", &TestEntry_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB},
+	{"Memory.PMM.PageFrameNumber.Conversions", &TestEntry_PMM_PageFrameNumberConversions},
 	{"Memory.PagingHw.EnablePaging.TlbRefillSmoke", &TestEntry_PagingHw_EnablePaging_TlbRefillSmoke},
 	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &TestEntry_PagingHw_UnmappedAccess_FaultsAndReportsBadV},
 	{"Memory.PagingHw.PagingFaultObserver.DispatchesAndCanHandle", &TestEntry_PagingHw_PagingFaultObserver_DispatchesAndCanHandle},

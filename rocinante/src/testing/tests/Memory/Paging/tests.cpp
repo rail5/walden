@@ -84,6 +84,83 @@ static void Test_Paging_MapTranslateUnmap(TestContext* ctx) {
 	ROCINANTE_EXPECT_TRUE(ctx, !translated_after_unmap.has_value());
 }
 
+static void Test_Paging_MapCount_TracksLeafMappings(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapPage4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::UnmapPage4KiB;
+
+	// Regression guard:
+	// Map/unmap must update per-frame map_count exactly once per leaf mapping.
+	// Alias mappings must be counted correctly.
+
+	static constexpr std::uintptr_t kUsableBase = 0x00100000;
+	static constexpr std::size_t kUsableSizeBytes = 128 * PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uintptr_t kKernelBase = 0x00400000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00401000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00500000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	const auto root = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root.has_value());
+	if (!root.has_value()) return;
+
+	const auto backing_page = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, backing_page.has_value());
+	if (!backing_page.has_value()) return;
+	const std::uintptr_t physical_page_base = backing_page.value();
+
+	const PagePermissions permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	const auto count0 = pmm.MapCountForPhysical(physical_page_base);
+	ROCINANTE_EXPECT_TRUE(ctx, count0.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, count0.value(), 0);
+
+	static constexpr std::uintptr_t kVirtualPageBase0 = 0x0000000000100000ull;
+	static constexpr std::uintptr_t kVirtualPageBase1 = 0x0000000000200000ull;
+
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(&pmm, root.value(), kVirtualPageBase0, physical_page_base, permissions));
+	const auto count1 = pmm.MapCountForPhysical(physical_page_base);
+	ROCINANTE_EXPECT_TRUE(ctx, count1.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, count1.value(), 1);
+
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(&pmm, root.value(), kVirtualPageBase1, physical_page_base, permissions));
+	const auto count2 = pmm.MapCountForPhysical(physical_page_base);
+	ROCINANTE_EXPECT_TRUE(ctx, count2.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, count2.value(), 2);
+
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root.value(), kVirtualPageBase0));
+	const auto count_after_unmap0 = pmm.MapCountForPhysical(physical_page_base);
+	ROCINANTE_EXPECT_TRUE(ctx, count_after_unmap0.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, count_after_unmap0.value(), 1);
+
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root.value(), kVirtualPageBase1));
+	const auto count_after_unmap1 = pmm.MapCountForPhysical(physical_page_base);
+	ROCINANTE_EXPECT_TRUE(ctx, count_after_unmap1.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, count_after_unmap1.value(), 0);
+
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePage(physical_page_base));
+}
+
 static void Test_Paging_UnmapReclaimsIntermediateTables(TestContext* ctx) {
 	using Rocinante::Memory::BootMemoryRegion;
 	using Rocinante::Memory::BootMemoryMap;
@@ -493,6 +570,10 @@ static void Test_Paging_Physmap_MapsRootPageTableAndAttributes(TestContext* ctx)
 
 void TestEntry_Paging_MapTranslateUnmap(TestContext* ctx) {
 	Test_Paging_MapTranslateUnmap(ctx);
+}
+
+void TestEntry_Paging_MapCount_TracksLeafMappings(TestContext* ctx) {
+	Test_Paging_MapCount_TracksLeafMappings(ctx);
 }
 
 void TestEntry_Paging_UnmapReclaimsIntermediateTables(TestContext* ctx) {

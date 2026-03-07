@@ -17,6 +17,24 @@ namespace Rocinante::Testing {
 
 namespace {
 
+static constexpr std::size_t AlignUpSizeBytes(std::size_t value, std::size_t alignment) {
+	return (value + (alignment - 1)) & ~(alignment - 1);
+}
+
+static constexpr std::size_t BitmapReservedPagesForTrackedPages(std::size_t tracked_page_count) {
+	const std::size_t bit_count = tracked_page_count;
+	const std::size_t byte_count = (bit_count + 7) / 8;
+	return AlignUpSizeBytes(byte_count, Rocinante::Memory::PhysicalMemoryManager::kPageSizeBytes) /
+		Rocinante::Memory::PhysicalMemoryManager::kPageSizeBytes;
+}
+
+static constexpr std::size_t FrameMetadataReservedPagesForTrackedPages(std::size_t tracked_page_count) {
+	const std::size_t raw_size_bytes =
+		tracked_page_count * Rocinante::Memory::PhysicalMemoryManager::kPageFrameMetadataSizeBytes;
+	return AlignUpSizeBytes(raw_size_bytes, Rocinante::Memory::PhysicalMemoryManager::kPageSizeBytes) /
+		Rocinante::Memory::PhysicalMemoryManager::kPageSizeBytes;
+}
+
 static void Test_PMM_RespectsReservedKernelAndDTB(TestContext* ctx) {
 	using Rocinante::Memory::BootMemoryRegion;
 	using Rocinante::Memory::BootMemoryMap;
@@ -51,9 +69,12 @@ static void Test_PMM_RespectsReservedKernelAndDTB(TestContext* ctx) {
 	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
 
 	// Expected free pages: total usable (16) minus reserved (2) minus kernel (4) minus DTB (1)
-	// minus PMM bitmap storage (at least 1 page) = 8.
+	// minus PMM bitmap storage (at least 1 page) minus PMM per-frame metadata = 7.
 	static constexpr std::size_t kExpectedTotalPages = 16;
-	static constexpr std::size_t kExpectedFreePages = 8;
+	static constexpr std::size_t kExpectedFreePages =
+		kExpectedTotalPages - 2 - 4 - 1 -
+		BitmapReservedPagesForTrackedPages(kExpectedTotalPages) -
+		FrameMetadataReservedPagesForTrackedPages(kExpectedTotalPages);
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.TotalPages(), kExpectedTotalPages);
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), kExpectedFreePages);
 
@@ -190,9 +211,13 @@ static void Test_PMM_ClampsTrackedRangeToPALEN(TestContext* ctx) {
 	static constexpr std::size_t kExpectedTotalPages = (1 * 1024 * 1024) / PhysicalMemoryManager::kPageSizeBytes;
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.TotalPages(), kExpectedTotalPages);
 
-	// Free pages: total minus bitmap-storage page (always at least 1 page) minus
-	// the zero page reservation.
-	static constexpr std::size_t kExpectedFreePages = kExpectedTotalPages - 1 - 1;
+	// Free pages: total minus bitmap-storage pages minus per-frame metadata pages
+	// minus the zero page reservation.
+	static constexpr std::size_t kExpectedFreePages =
+		kExpectedTotalPages -
+		BitmapReservedPagesForTrackedPages(kExpectedTotalPages) -
+		FrameMetadataReservedPagesForTrackedPages(kExpectedTotalPages) -
+		1;
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), kExpectedFreePages);
 
 	// Restore CPUCFG backend to the real instruction path for subsequent tests.
@@ -279,11 +304,64 @@ static void Test_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(TestCon
 	// - DTB: 1 MiB = 256 pages
 	// - Kernel: 256 KiB = 64 pages
 	// - PMM bitmap storage: for 1024 tracked pages => 128 bytes, which occupies 1 page once page-granular reserved
+	// - PMM per-frame metadata: for 1024 tracked pages => 16 KiB, which occupies 4 pages once page-granular reserved
 	// - Zero page: explicitly reserved by PMM policy (since kernel is not at physical 0)
 	static constexpr std::size_t kExpectedTotalPages = 1024;
-	static constexpr std::size_t kExpectedFreePages = 1024 - 256 - 64 - 1 - 1;
+	static constexpr std::size_t kExpectedFreePages =
+		kExpectedTotalPages - 256 - 64 -
+		BitmapReservedPagesForTrackedPages(kExpectedTotalPages) -
+		FrameMetadataReservedPagesForTrackedPages(kExpectedTotalPages) -
+		1;
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.TotalPages(), kExpectedTotalPages);
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), kExpectedFreePages);
+}
+
+static void Test_PMM_PageFrameNumberConversions(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+
+	static constexpr std::uintptr_t kUsableBase = 0x00100000;
+	static constexpr std::size_t kUsablePages = 64;
+	static constexpr std::size_t kUsableSizeBytes = kUsablePages * PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uintptr_t kKernelBase = 0x00400000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00401000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00500000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	const std::uintptr_t tracked_base = pmm.TrackedPhysicalBase();
+	const std::uintptr_t tracked_limit = pmm.TrackedPhysicalLimit();
+	const std::size_t tracked_pages = pmm.TotalPages();
+	ROCINANTE_EXPECT_TRUE(ctx, tracked_pages != 0);
+
+	const auto pfn0 = pmm.PageFrameNumberFromPhysical(tracked_base);
+	ROCINANTE_EXPECT_TRUE(ctx, pfn0.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, pfn0.value(), 0);
+
+	const auto pfn_last = pmm.PageFrameNumberFromPhysical(tracked_base + ((tracked_pages - 1) * PhysicalMemoryManager::kPageSizeBytes));
+	ROCINANTE_EXPECT_TRUE(ctx, pfn_last.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, pfn_last.value(), tracked_pages - 1);
+
+	ROCINANTE_EXPECT_TRUE(ctx, !pmm.PageFrameNumberFromPhysical(tracked_base + 1).has_value());
+	ROCINANTE_EXPECT_TRUE(ctx, !pmm.PageFrameNumberFromPhysical(tracked_limit).has_value());
+
+	const auto phys0 = pmm.PhysicalFromPageFrameNumber(0);
+	ROCINANTE_EXPECT_TRUE(ctx, phys0.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, phys0.value(), tracked_base);
+
+	const auto phys_last = pmm.PhysicalFromPageFrameNumber(tracked_pages - 1);
+	ROCINANTE_EXPECT_TRUE(ctx, phys_last.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, phys_last.value(), tracked_base + ((tracked_pages - 1) * PhysicalMemoryManager::kPageSizeBytes));
+
+	ROCINANTE_EXPECT_TRUE(ctx, !pmm.PhysicalFromPageFrameNumber(tracked_pages).has_value());
 }
 
 } // namespace
@@ -306,6 +384,10 @@ void TestEntry_PMM_BitmapPlacement_RespectsPALEN(TestContext* ctx) {
 
 void TestEntry_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(TestContext* ctx) {
 	Test_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(ctx);
+}
+
+void TestEntry_PMM_PageFrameNumberConversions(TestContext* ctx) {
+	Test_PMM_PageFrameNumberConversions(ctx);
 }
 
 } // namespace Rocinante::Testing

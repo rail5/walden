@@ -489,6 +489,10 @@ bool MapPage4KiB(
 	if (EntryIsPresent(table->entries[leaf_index])) return false;
 
 	table->entries[leaf_index] = EncodeLeafEntry(physical_address, layout.physical_page_base_mask, permissions);
+	if (!pmm->IncrementMapCountForPhysical(physical_address)) {
+		table->entries[leaf_index] = 0;
+		return false;
+	}
 	return true;
 }
 
@@ -539,7 +543,10 @@ bool UnmapPage4KiB(PhysicalMemoryManager* pmm, const PageTableRoot& root, std::u
 	}
 
 	const std::size_t leaf_index = IndexFromVirtualAddressAtLevel(virtual_address, 0);
-	if (!EntryIsPresent(table->entries[leaf_index])) return false;
+	const std::uint64_t leaf_entry = table->entries[leaf_index];
+	if (!EntryIsPresent(leaf_entry)) return false;
+	const std::uintptr_t mapped_physical = EntryPhysicalPageBase(leaf_entry, layout.physical_page_base_mask);
+	if (!pmm->DecrementMapCountForPhysical(mapped_physical)) return false;
 	table->entries[leaf_index] = 0;
 
 	// Policy: reclaim empty intermediate page-table pages.

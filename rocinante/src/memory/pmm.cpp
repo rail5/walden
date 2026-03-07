@@ -77,6 +77,8 @@ PhysicalMemoryManager& GetPhysicalMemoryManager() {
 void PhysicalMemoryManager::_reset_state() {
 	m_bitmap_physical_base = 0;
 	m_bitmap_size_bytes = 0;
+	m_frame_metadata_physical_base = 0;
+	m_frame_metadata_size_bytes = 0;
 	m_tracked_physical_base = 0;
 	m_tracked_physical_limit = 0;
 	m_page_count = 0;
@@ -109,6 +111,32 @@ const std::uint8_t* PhysicalMemoryManager::_bitmap_ptr() const {
 	const std::uintptr_t physmap_virtual =
 		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(m_bitmap_physical_base, virtual_address_bits);
 	return reinterpret_cast<const std::uint8_t*>(physmap_virtual);
+}
+
+PhysicalMemoryManager::PageFrameMetadata* PhysicalMemoryManager::_frame_metadata_ptr() {
+	if (m_frame_metadata_size_bytes == 0) return nullptr;
+
+	if (!IsMappedAddressTranslationMode()) {
+		return reinterpret_cast<PageFrameMetadata*>(m_frame_metadata_physical_base);
+	}
+
+	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const std::uintptr_t physmap_virtual =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(m_frame_metadata_physical_base, virtual_address_bits);
+	return reinterpret_cast<PageFrameMetadata*>(physmap_virtual);
+}
+
+const PhysicalMemoryManager::PageFrameMetadata* PhysicalMemoryManager::_frame_metadata_ptr() const {
+	if (m_frame_metadata_size_bytes == 0) return nullptr;
+
+	if (!IsMappedAddressTranslationMode()) {
+		return reinterpret_cast<const PageFrameMetadata*>(m_frame_metadata_physical_base);
+	}
+
+	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const std::uintptr_t physmap_virtual =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(m_frame_metadata_physical_base, virtual_address_bits);
+	return reinterpret_cast<const PageFrameMetadata*>(physmap_virtual);
 }
 
 bool PhysicalMemoryManager::_allocate_bitmap(
@@ -248,6 +276,133 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 	// non-allocatable.
 	for (std::size_t i = 0; i < bitmap_alloc_size_bytes; i++) {
 		bitmap[i] = 0xFF;
+	}
+
+	return true;
+}
+
+bool PhysicalMemoryManager::_allocate_frame_metadata(
+	const BootMemoryMap& boot_map,
+	std::size_t page_count,
+	std::uintptr_t kernel_physical_base,
+	std::uintptr_t kernel_physical_end,
+	std::uintptr_t device_tree_physical_base,
+	std::size_t device_tree_size_bytes
+) {
+	if (page_count == 0) return false;
+	if (m_bitmap_size_bytes == 0) return false;
+
+	const std::uint32_t palen_bits = Rocinante::GetCPUCFG().PhysicalAddressBits();
+	const bool palen_valid = (palen_bits != 0) && (palen_bits < 64);
+	const std::uintptr_t max_physical_exclusive =
+		palen_valid ? static_cast<std::uintptr_t>(1ull << palen_bits) : 0;
+
+	if (page_count > (static_cast<std::size_t>(-1) / kPageFrameMetadataSizeBytes)) return false;
+	const std::size_t raw_size_bytes = page_count * kPageFrameMetadataSizeBytes;
+	if (raw_size_bytes == 0) return false;
+	const std::size_t metadata_alloc_size_bytes = AlignUp(raw_size_bytes, kPageSizeBytes);
+	if (metadata_alloc_size_bytes == 0) return false;
+
+	std::uintptr_t chosen_base = 0;
+	for (std::size_t i = 0; i < boot_map.region_count; i++) {
+		const auto& r = boot_map.regions[i];
+		if (r.type != BootMemoryRegion::Type::UsableRAM) continue;
+		if (r.size_bytes == 0) continue;
+		if (AddOverflows(static_cast<std::uintptr_t>(r.physical_base), static_cast<std::size_t>(r.size_bytes))) continue;
+
+		const std::uintptr_t region_begin = static_cast<std::uintptr_t>(r.physical_base);
+		std::uintptr_t region_end = region_begin + static_cast<std::uintptr_t>(r.size_bytes);
+		if (palen_valid) {
+			if (region_begin >= max_physical_exclusive) continue;
+			if (region_end > max_physical_exclusive) region_end = max_physical_exclusive;
+			if (region_end <= region_begin) continue;
+		}
+
+		std::uintptr_t candidate = region_begin;
+		if (candidate < kPageSizeBytes) candidate = kPageSizeBytes;
+		candidate = AlignUp(candidate, kPageSizeBytes);
+		if (candidate < region_begin) continue;
+
+		for (std::size_t bump = 0; bump < 8; bump++) {
+			if (candidate < region_begin) break;
+			if (AddOverflows(candidate, metadata_alloc_size_bytes)) break;
+			const std::uintptr_t candidate_end = candidate + static_cast<std::uintptr_t>(metadata_alloc_size_bytes);
+			if (candidate_end > region_end) break;
+			if (palen_valid && candidate_end > max_physical_exclusive) break;
+
+			bool bumped = false;
+			if (kernel_physical_end > kernel_physical_base) {
+				const std::size_t kernel_size = static_cast<std::size_t>(kernel_physical_end - kernel_physical_base);
+				if (RangesOverlap(candidate, metadata_alloc_size_bytes, kernel_physical_base, kernel_size)) {
+					std::uintptr_t bump_end = kernel_physical_end;
+					if (palen_valid && bump_end > max_physical_exclusive) bump_end = max_physical_exclusive;
+					candidate = AlignUp(bump_end, kPageSizeBytes);
+					bumped = true;
+				}
+			}
+
+			if (!bumped && device_tree_physical_base != 0 && device_tree_size_bytes != 0) {
+				if (RangesOverlap(candidate, metadata_alloc_size_bytes, device_tree_physical_base, device_tree_size_bytes)) {
+					if (AddOverflows(device_tree_physical_base, device_tree_size_bytes)) break;
+					const std::uintptr_t dtb_end = device_tree_physical_base + static_cast<std::uintptr_t>(device_tree_size_bytes);
+					std::uintptr_t bump_end = dtb_end;
+					if (palen_valid && bump_end > max_physical_exclusive) bump_end = max_physical_exclusive;
+					candidate = AlignUp(bump_end, kPageSizeBytes);
+					bumped = true;
+				}
+			}
+
+			if (!bumped && m_bitmap_physical_base != 0 && m_bitmap_size_bytes != 0) {
+				if (RangesOverlap(candidate, metadata_alloc_size_bytes, m_bitmap_physical_base, m_bitmap_size_bytes)) {
+					if (AddOverflows(m_bitmap_physical_base, m_bitmap_size_bytes)) break;
+					const std::uintptr_t bitmap_end = m_bitmap_physical_base + static_cast<std::uintptr_t>(m_bitmap_size_bytes);
+					std::uintptr_t bump_end = bitmap_end;
+					if (palen_valid && bump_end > max_physical_exclusive) bump_end = max_physical_exclusive;
+					candidate = AlignUp(bump_end, kPageSizeBytes);
+					bumped = true;
+				}
+			}
+
+			if (!bumped) {
+				for (std::size_t ri = 0; ri < boot_map.region_count; ri++) {
+					const auto& rr = boot_map.regions[ri];
+					if (rr.type != BootMemoryRegion::Type::Reserved) continue;
+					if (rr.size_bytes == 0) continue;
+					if (AddOverflows(static_cast<std::uintptr_t>(rr.physical_base), static_cast<std::size_t>(rr.size_bytes))) continue;
+
+					const std::uintptr_t reserved_begin = static_cast<std::uintptr_t>(rr.physical_base);
+					const std::uintptr_t reserved_end = reserved_begin + static_cast<std::uintptr_t>(rr.size_bytes);
+					const std::size_t reserved_size = static_cast<std::size_t>(reserved_end - reserved_begin);
+
+					if (RangesOverlap(candidate, metadata_alloc_size_bytes, reserved_begin, reserved_size)) {
+						std::uintptr_t bump_end = reserved_end;
+						if (palen_valid && bump_end > max_physical_exclusive) bump_end = max_physical_exclusive;
+						candidate = AlignUp(bump_end, kPageSizeBytes);
+						bumped = true;
+						break;
+					}
+				}
+			}
+
+			if (!bumped) {
+				chosen_base = candidate;
+				break;
+			}
+		}
+
+		if (chosen_base != 0) break;
+	}
+
+	if (chosen_base == 0) return false;
+
+	m_frame_metadata_physical_base = chosen_base;
+	m_frame_metadata_size_bytes = metadata_alloc_size_bytes;
+	PageFrameMetadata* metadata = _frame_metadata_ptr();
+	if (!metadata) return false;
+
+	const std::size_t element_count = m_page_count;
+	for (std::size_t i = 0; i < element_count; i++) {
+		metadata[i] = PageFrameMetadata{};
 	}
 
 	return true;
@@ -410,6 +565,18 @@ bool PhysicalMemoryManager::InitializeFromBootMemoryMap(
 		return false;
 	}
 
+	if (!_allocate_frame_metadata(
+		boot_map,
+		m_page_count,
+		kernel_physical_base,
+		kernel_physical_end,
+		device_tree_physical_base,
+		device_tree_size_bytes
+	)) {
+		_reset_state();
+		return false;
+	}
+
 	// 1) Mark all UsableRAM pages free.
 	for (std::size_t i = 0; i < boot_map.region_count; i++) {
 		const auto& r = boot_map.regions[i];
@@ -454,6 +621,14 @@ bool PhysicalMemoryManager::InitializeFromBootMemoryMap(
 		}
 	}
 
+	// 4.6) Reserve the PMM frame-metadata storage pages.
+	if (m_frame_metadata_size_bytes != 0) {
+		if (!_mark_range_used(m_frame_metadata_physical_base, m_frame_metadata_size_bytes)) {
+			_reset_state();
+			return false;
+		}
+	}
+
 	// 5) Proactively reserve the zero page.
 	//
 	// Why:
@@ -476,6 +651,76 @@ bool PhysicalMemoryManager::InitializeFromBootMemoryMap(
 	m_next_search_index = 0;
 	m_initialized = true;
 	return true;
+}
+
+Rocinante::Optional<std::size_t> PhysicalMemoryManager::PageFrameNumberFromPhysical(std::uintptr_t physical_address) const {
+	if (!m_initialized) return Rocinante::nullopt;
+	if ((physical_address % kPageSizeBytes) != 0) return Rocinante::nullopt;
+	if (physical_address < m_tracked_physical_base) return Rocinante::nullopt;
+	if (physical_address >= m_tracked_physical_limit) return Rocinante::nullopt;
+
+	const std::size_t page_frame_number = _physical_to_page_index(physical_address);
+	if (page_frame_number >= m_page_count) return Rocinante::nullopt;
+	return Rocinante::Optional<std::size_t>(page_frame_number);
+}
+
+Rocinante::Optional<std::uintptr_t> PhysicalMemoryManager::PhysicalFromPageFrameNumber(std::size_t page_frame_number) const {
+	if (!m_initialized) return Rocinante::nullopt;
+	if (page_frame_number >= m_page_count) return Rocinante::nullopt;
+	return Rocinante::Optional<std::uintptr_t>(_page_index_to_physical(page_frame_number));
+}
+
+bool PhysicalMemoryManager::IncrementMapCountForPhysical(std::uintptr_t physical_page_base) {
+	if (!m_initialized) return false;
+	if ((physical_page_base % kPageSizeBytes) != 0) return false;
+
+	if (physical_page_base < m_tracked_physical_base) return true;
+	if (physical_page_base >= m_tracked_physical_limit) return true;
+
+	const std::size_t pfn = _physical_to_page_index(physical_page_base);
+	if (pfn >= m_page_count) return false;
+
+	auto* metadata = _frame_metadata_ptr();
+	if (!metadata) return false;
+
+	const std::uint32_t before = metadata[pfn].map_count;
+	if (before == static_cast<std::uint32_t>(-1)) return false;
+	metadata[pfn].map_count = before + 1;
+	return true;
+}
+
+bool PhysicalMemoryManager::DecrementMapCountForPhysical(std::uintptr_t physical_page_base) {
+	if (!m_initialized) return false;
+	if ((physical_page_base % kPageSizeBytes) != 0) return false;
+
+	if (physical_page_base < m_tracked_physical_base) return true;
+	if (physical_page_base >= m_tracked_physical_limit) return true;
+
+	const std::size_t pfn = _physical_to_page_index(physical_page_base);
+	if (pfn >= m_page_count) return false;
+
+	auto* metadata = _frame_metadata_ptr();
+	if (!metadata) return false;
+
+	const std::uint32_t before = metadata[pfn].map_count;
+	if (before == 0) return false;
+	metadata[pfn].map_count = before - 1;
+	return true;
+}
+
+Rocinante::Optional<std::uint32_t> PhysicalMemoryManager::MapCountForPhysical(std::uintptr_t physical_page_base) const {
+	if (!m_initialized) return Rocinante::nullopt;
+	if ((physical_page_base % kPageSizeBytes) != 0) return Rocinante::nullopt;
+	if (physical_page_base < m_tracked_physical_base) return Rocinante::nullopt;
+	if (physical_page_base >= m_tracked_physical_limit) return Rocinante::nullopt;
+
+	const std::size_t pfn = _physical_to_page_index(physical_page_base);
+	if (pfn >= m_page_count) return Rocinante::nullopt;
+
+	const auto* metadata = _frame_metadata_ptr();
+	if (!metadata) return Rocinante::nullopt;
+
+	return Rocinante::Optional<std::uint32_t>(metadata[pfn].map_count);
 }
 
 Rocinante::Optional<std::uintptr_t> PhysicalMemoryManager::AllocatePage() {

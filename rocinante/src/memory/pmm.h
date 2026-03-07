@@ -35,6 +35,15 @@ class PhysicalMemoryManager final {
 		// 4 KiB is the common base page size for LoongArch; huge pages come later.
 		static constexpr std::size_t kPageSizeBytes = 4096;
 
+		// Per-frame metadata size.
+		//
+		// Why this is a fixed constant:
+		// - The PMM must reserve a deterministic amount of physical memory for its
+		//   own metadata.
+		// - Tests should be able to compute expected metadata footprint without
+		//   reaching into private implementation details.
+		static constexpr std::size_t kPageFrameMetadataSizeBytes = 16;
+
 		PhysicalMemoryManager() = default;
 		PhysicalMemoryManager(const PhysicalMemoryManager&) = delete;
 		PhysicalMemoryManager& operator=(const PhysicalMemoryManager&) = delete;
@@ -76,9 +85,66 @@ class PhysicalMemoryManager final {
 		std::uintptr_t TrackedPhysicalBase() const { return m_tracked_physical_base; }
 		std::uintptr_t TrackedPhysicalLimit() const { return m_tracked_physical_limit; }
 
+		/**
+		 * @brief Converts a page-aligned physical address into a page frame number (PFN).
+		 *
+		 * Returns nullopt if:
+		 * - the PMM is not initialized,
+		 * - the address is not page-aligned, or
+		 * - the address is outside the PMM tracked physical span.
+		 */
+		Rocinante::Optional<std::size_t> PageFrameNumberFromPhysical(std::uintptr_t physical_address) const;
+
+		/**
+		 * @brief Converts a PFN into a page-aligned physical address.
+		 *
+		 * Returns nullopt if:
+		 * - the PMM is not initialized, or
+		 * - the PFN is outside the tracked span.
+		 */
+		Rocinante::Optional<std::uintptr_t> PhysicalFromPageFrameNumber(std::size_t page_frame_number) const;
+
+		/**
+		 * @brief Increments the leaf-mapping count (map_count) for a physical page.
+		 *
+		 * Semantics:
+		 * - If the physical page is within the PMM tracked span, its map_count is
+		 *   incremented.
+		 * - If the physical page is outside the tracked span (e.g., MMIO), this is
+		 *   a no-op and returns true.
+		 */
+		bool IncrementMapCountForPhysical(std::uintptr_t physical_page_base);
+
+		/**
+		 * @brief Decrements the leaf-mapping count (map_count) for a physical page.
+		 *
+		 * Semantics:
+		 * - If the physical page is within the PMM tracked span, its map_count is
+		 *   decremented.
+		 * - If the physical page is outside the tracked span (e.g., MMIO), this is
+		 *   a no-op and returns true.
+		 */
+		bool DecrementMapCountForPhysical(std::uintptr_t physical_page_base);
+
+		/**
+		 * @brief Returns the current map_count for a physical page, if tracked.
+		 */
+		Rocinante::Optional<std::uint32_t> MapCountForPhysical(std::uintptr_t physical_page_base) const;
+
 	private:
+		struct PageFrameMetadata final {
+			std::uint32_t ref_count = 0;
+			std::uint32_t map_count = 0;
+			std::uint32_t flags = 0;
+			std::uint32_t reserved = 0;
+		};
+		static_assert(sizeof(PageFrameMetadata) == kPageFrameMetadataSizeBytes);
+
 		std::uintptr_t m_bitmap_physical_base = 0;
 		std::size_t m_bitmap_size_bytes = 0;
+
+		std::uintptr_t m_frame_metadata_physical_base = 0;
+		std::size_t m_frame_metadata_size_bytes = 0;
 
 		std::uintptr_t m_tracked_physical_base = 0;
 		std::uintptr_t m_tracked_physical_limit = 0;
@@ -90,8 +156,18 @@ class PhysicalMemoryManager final {
 
 		std::uint8_t* _bitmap_ptr();
 		const std::uint8_t* _bitmap_ptr() const;
+		PageFrameMetadata* _frame_metadata_ptr();
+		const PageFrameMetadata* _frame_metadata_ptr() const;
 
 		bool _allocate_bitmap(
+			const BootMemoryMap& boot_map,
+			std::size_t page_count,
+			std::uintptr_t kernel_physical_base,
+			std::uintptr_t kernel_physical_end,
+			std::uintptr_t device_tree_physical_base,
+			std::size_t device_tree_size_bytes
+		);
+		bool _allocate_frame_metadata(
 			const BootMemoryMap& boot_map,
 			std::size_t page_count,
 			std::uintptr_t kernel_physical_base,
