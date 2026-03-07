@@ -7,6 +7,7 @@
 
 #include <src/memory/memory.h>
 #include <src/memory/heap.h>
+#include <src/memory/kernel_va_allocator.h>
 #include <src/memory/paging.h>
 #include <src/memory/paging_hw.h>
 #include <src/memory/paging_state.h>
@@ -457,6 +458,7 @@ void RunPagingBringup(
 	const std::uintptr_t kernel_higher_half_base =
 		Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(address_bits.virtual_address_bits);
 	std::uintptr_t higher_half_stack_top = 0;
+	Rocinante::Memory::KernelVirtualAddressAllocator kernel_va;
 
 	if (!Rocinante::Memory::Paging::MapRange4KiB(
 		&pmm,
@@ -472,6 +474,19 @@ void RunPagingBringup(
 		uart.puts("Paging bring-up: kernel higher-half base=");
 		uart.write_dec_u64(kernel_higher_half_base);
 		uart.putc('\n');
+
+		// Bring-up policy: allocate additional kernel virtual ranges out of the
+		// gap between the kernel higher-half mapping and the physmap region.
+		const std::uintptr_t kernel_higher_half_end =
+			(kernel_higher_half_base + map_size_rounded + (Rocinante::Memory::Paging::kPageSizeBytes - 1)) &
+			~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+		const std::uintptr_t physmap_base =
+			Rocinante::Memory::VirtualLayout::PhysMapBase(address_bits.virtual_address_bits);
+		if (kernel_higher_half_end >= physmap_base) {
+			uart.puts("Paging bring-up: no VA space between higher-half kernel and physmap; skipping stack/heap mapping\n");
+		} else {
+			kernel_va.Init(kernel_higher_half_end, physmap_base);
+		}
 	}
 
 	// Identity-map the UART and syscon MMIO pages so existing raw MMIO pointers
@@ -535,68 +550,72 @@ void RunPagingBringup(
 		static constexpr std::size_t kHigherHalfStackGuardPageCount = 1;
 		static constexpr std::size_t kHigherHalfStackMappedPageCount = 4;
 
-		const std::uintptr_t stack_region_base_unaligned =
-			kernel_higher_half_base + map_size_rounded;
-		const std::uintptr_t stack_guard_virtual_base =
-			(stack_region_base_unaligned + (Rocinante::Memory::Paging::kPageSizeBytes - 1)) &
-			~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
-		const std::uintptr_t stack_virtual_base =
-			stack_guard_virtual_base + (kHigherHalfStackGuardPageCount * Rocinante::Memory::Paging::kPageSizeBytes);
-		const std::uintptr_t stack_virtual_top =
-			stack_virtual_base + (kHigherHalfStackMappedPageCount * Rocinante::Memory::Paging::kPageSizeBytes);
+		const auto stack_region_or = kernel_va.Allocate(
+			(kHigherHalfStackGuardPageCount + kHigherHalfStackMappedPageCount) * Rocinante::Memory::Paging::kPageSizeBytes,
+			Rocinante::Memory::Paging::kPageSizeBytes
+		);
+		if (!stack_region_or.has_value()) {
+			uart.puts("Paging bring-up: failed to allocate higher-half stack VA range\n");
+		} else {
+			const std::uintptr_t stack_guard_virtual_base = stack_region_or.value();
+			const std::uintptr_t stack_virtual_base =
+				stack_guard_virtual_base + (kHigherHalfStackGuardPageCount * Rocinante::Memory::Paging::kPageSizeBytes);
+			const std::uintptr_t stack_virtual_top =
+				stack_virtual_base + (kHigherHalfStackMappedPageCount * Rocinante::Memory::Paging::kPageSizeBytes);
 
-		Rocinante::Memory::Paging::PagePermissions stack_permissions{
-			.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
-			.execute = Rocinante::Memory::Paging::ExecutePermissions::NoExecute,
-			.cache = Rocinante::Memory::Paging::CacheMode::CoherentCached,
-			.global = true,
-		};
+			Rocinante::Memory::Paging::PagePermissions stack_permissions{
+				.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
+				.execute = Rocinante::Memory::Paging::ExecutePermissions::NoExecute,
+				.cache = Rocinante::Memory::Paging::CacheMode::CoherentCached,
+				.global = true,
+			};
 
-		std::uintptr_t stack_physical_pages[kHigherHalfStackMappedPageCount] = {};
-		bool stack_ok = true;
+			std::uintptr_t stack_physical_pages[kHigherHalfStackMappedPageCount] = {};
+			bool stack_ok = true;
 
-		for (std::size_t i = 0; i < kHigherHalfStackMappedPageCount; i++) {
-			const auto stack_page_or = pmm.AllocatePage();
-			if (!stack_page_or.has_value()) {
-				uart.puts("Paging bring-up: failed to allocate higher-half stack page\n");
-				stack_ok = false;
-				break;
-			}
-
-			stack_physical_pages[i] = stack_page_or.value();
-			const std::uintptr_t page_virtual = stack_virtual_base + (i * Rocinante::Memory::Paging::kPageSizeBytes);
-			if (!Rocinante::Memory::Paging::MapRange4KiB(
-				&pmm,
-				root,
-				page_virtual,
-				stack_physical_pages[i],
-				Rocinante::Memory::Paging::kPageSizeBytes,
-				stack_permissions,
-				address_bits
-			)) {
-				uart.puts("Paging bring-up: failed to map higher-half stack page\n");
-				uart.puts("Paging bring-up: NOTE: stack mapping failure may leave partial mappings\n");
-				stack_ok = false;
-				break;
-			}
-		}
-
-		if (stack_ok) {
-			higher_half_stack_top = stack_virtual_top;
-			uart.puts("Paging bring-up: higher-half stack mapped; guard_virt_base=");
-			uart.write_dec_u64(stack_guard_virtual_base);
-			uart.puts(" stack_virt_base=");
-			uart.write_dec_u64(stack_virtual_base);
-			uart.puts(" stack_virt_top=");
-			uart.write_dec_u64(stack_virtual_top);
-			uart.puts(" pages=");
-			uart.write_dec_u64(kHigherHalfStackMappedPageCount);
-			uart.puts(" phys_pages=[");
 			for (std::size_t i = 0; i < kHigherHalfStackMappedPageCount; i++) {
-				if (i != 0) uart.puts(", ");
-				uart.write_dec_u64(stack_physical_pages[i]);
+				const auto stack_page_or = pmm.AllocatePage();
+				if (!stack_page_or.has_value()) {
+					uart.puts("Paging bring-up: failed to allocate higher-half stack page\n");
+					stack_ok = false;
+					break;
+				}
+
+				stack_physical_pages[i] = stack_page_or.value();
+				const std::uintptr_t page_virtual = stack_virtual_base + (i * Rocinante::Memory::Paging::kPageSizeBytes);
+				if (!Rocinante::Memory::Paging::MapRange4KiB(
+					&pmm,
+					root,
+					page_virtual,
+					stack_physical_pages[i],
+					Rocinante::Memory::Paging::kPageSizeBytes,
+					stack_permissions,
+					address_bits
+				)) {
+					uart.puts("Paging bring-up: failed to map higher-half stack page\n");
+					uart.puts("Paging bring-up: NOTE: stack mapping failure may leave partial mappings\n");
+					stack_ok = false;
+					break;
+				}
 			}
-			uart.puts("]\n");
+
+			if (stack_ok) {
+				higher_half_stack_top = stack_virtual_top;
+				uart.puts("Paging bring-up: higher-half stack mapped; guard_virt_base=");
+				uart.write_dec_u64(stack_guard_virtual_base);
+				uart.puts(" stack_virt_base=");
+				uart.write_dec_u64(stack_virtual_base);
+				uart.puts(" stack_virt_top=");
+				uart.write_dec_u64(stack_virtual_top);
+				uart.puts(" pages=");
+				uart.write_dec_u64(kHigherHalfStackMappedPageCount);
+				uart.puts(" phys_pages=[");
+				for (std::size_t i = 0; i < kHigherHalfStackMappedPageCount; i++) {
+					if (i != 0) uart.puts(", ");
+					uart.write_dec_u64(stack_physical_pages[i]);
+				}
+				uart.puts("]\n");
+			}
 		}
 	}
 
@@ -617,9 +636,12 @@ void RunPagingBringup(
 		if (higher_half_stack_top == 0) {
 			uart.puts("Paging bring-up: higher-half stack not mapped; skipping heap mapping\n");
 		} else {
-			const std::uintptr_t heap_virtual_base =
-				(higher_half_stack_top + (Rocinante::Memory::Paging::kPageSizeBytes - 1)) &
-				~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+			const auto heap_virtual_or =
+				kernel_va.Allocate(kHeapSizeBytes, Rocinante::Memory::Paging::kPageSizeBytes);
+			if (!heap_virtual_or.has_value()) {
+				uart.puts("Paging bring-up: failed to allocate heap VA range\n");
+			} else {
+				const std::uintptr_t heap_virtual_base = heap_virtual_or.value();
 
 			Rocinante::Memory::Paging::PagePermissions heap_permissions{
 				.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
@@ -653,16 +675,17 @@ void RunPagingBringup(
 				}
 			}
 
-			if (heap_ok) {
-				g_paging_bringup_heap_virtual_base = heap_virtual_base;
-				g_paging_bringup_heap_size_bytes = kHeapSizeBytes;
-				uart.puts("Paging bring-up: higher-half heap mapped; virt_base=");
-				uart.write_dec_u64(heap_virtual_base);
-				uart.puts(" size_bytes=");
-				uart.write_dec_u64(kHeapSizeBytes);
-				uart.puts(" pages=");
-				uart.write_dec_u64(kHeapPageCount);
-				uart.putc('\n');
+				if (heap_ok) {
+					g_paging_bringup_heap_virtual_base = heap_virtual_base;
+					g_paging_bringup_heap_size_bytes = kHeapSizeBytes;
+					uart.puts("Paging bring-up: higher-half heap mapped; virt_base=");
+					uart.write_dec_u64(heap_virtual_base);
+					uart.puts(" size_bytes=");
+					uart.write_dec_u64(kHeapSizeBytes);
+					uart.puts(" pages=");
+					uart.write_dec_u64(kHeapPageCount);
+					uart.putc('\n');
+				}
 			}
 		}
 	}
