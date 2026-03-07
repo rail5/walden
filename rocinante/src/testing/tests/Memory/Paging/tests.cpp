@@ -250,8 +250,15 @@ static void Test_Paging_Physmap_MapsRootPageTableAndAttributes(TestContext* ctx)
 	}
 
 	// Read the physmap leaf PTE and validate cache + NX.
-	const auto ReadLeafPteEntry_Assuming4Level4KiB =
-		[&](std::uintptr_t probe_va) -> Rocinante::Optional<std::uint64_t> {
+	struct WalkResult final {
+		std::uint64_t e3;
+		std::uint64_t e2;
+		std::uint64_t e1;
+		std::uint64_t leaf;
+	};
+
+	const auto WalkToLeafPte_Assuming4Level4KiB =
+		[&](std::uintptr_t probe_va) -> Rocinante::Optional<WalkResult> {
 			constexpr std::size_t kIndexMask =
 				(1u << Rocinante::Memory::Paging::kIndexBitsPerLevel) - 1u;
 			constexpr std::size_t kShiftPt = Rocinante::Memory::Paging::kPageShiftBits;
@@ -291,17 +298,50 @@ static void Test_Paging_Physmap_MapsRootPageTableAndAttributes(TestContext* ctx)
 			auto* pt = reinterpret_cast<PageTablePage*>(EntryBase4K(e1));
 			if (!pt) return Rocinante::nullopt;
 
-			return Rocinante::Optional<std::uint64_t>(pt->entries[idx_pt]);
+			return Rocinante::Optional<WalkResult>(WalkResult{
+				.e3 = e3,
+				.e2 = e2,
+				.e1 = e1,
+				.leaf = pt->entries[idx_pt],
+			});
 		};
 
-	const auto pte_or = ReadLeafPteEntry_Assuming4Level4KiB(physmap_root_virtual);
-	ROCINANTE_EXPECT_TRUE(ctx, pte_or.has_value());
-	if (!pte_or.has_value()) return;
-	const std::uint64_t pte = pte_or.value();
+	const auto walk_or = WalkToLeafPte_Assuming4Level4KiB(physmap_root_virtual);
+	ROCINANTE_EXPECT_TRUE(ctx, walk_or.has_value());
+	if (!walk_or.has_value()) return;
+	const WalkResult walk = walk_or.value();
+	const std::uint64_t pte = walk.leaf;
+
+	// Intermediate directory entries must be walkable but must not claim "global".
+	// In the privileged spec, bit 6 is used as a huge-page indicator in directory entries.
+	ROCINANTE_EXPECT_TRUE(ctx, (walk.e3 & (PteBits::kValid | PteBits::kPresent)) == (PteBits::kValid | PteBits::kPresent));
+	ROCINANTE_EXPECT_TRUE(ctx, (walk.e2 & (PteBits::kValid | PteBits::kPresent)) == (PteBits::kValid | PteBits::kPresent));
+	ROCINANTE_EXPECT_TRUE(ctx, (walk.e1 & (PteBits::kValid | PteBits::kPresent)) == (PteBits::kValid | PteBits::kPresent));
+	ROCINANTE_EXPECT_EQ_U64(ctx, (walk.e3 & PteBits::kGlobal), 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, (walk.e2 & PteBits::kGlobal), 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, (walk.e1 & PteBits::kGlobal), 0);
+
+	// Reserved bits in the TLBELO low-order layout (11:9) should not be set in our
+	// in-memory entries.
+	static constexpr std::uint64_t kReservedBits11To9 = (0x7ull << 9);
+	ROCINANTE_EXPECT_EQ_U64(ctx, (walk.e3 & kReservedBits11To9), 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, (walk.e2 & kReservedBits11To9), 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, (walk.e1 & kReservedBits11To9), 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, (pte & kReservedBits11To9), 0);
 
 	const std::uint64_t cache_field = (pte & PteBits::kCacheMask) >> PteBits::kCacheShift;
 	const bool nx = (pte & PteBits::kNoExecute) != 0;
+	const bool v = (pte & PteBits::kValid) != 0;
+	const bool p = (pte & PteBits::kPresent) != 0;
+	const bool w = (pte & PteBits::kWrite) != 0;
+	const bool d = (pte & PteBits::kDirty) != 0;
+	const bool g = (pte & PteBits::kGlobal) != 0;
 	ROCINANTE_EXPECT_TRUE(ctx, nx);
+	ROCINANTE_EXPECT_TRUE(ctx, v);
+	ROCINANTE_EXPECT_TRUE(ctx, p);
+	ROCINANTE_EXPECT_TRUE(ctx, w);
+	ROCINANTE_EXPECT_TRUE(ctx, d);
+	ROCINANTE_EXPECT_TRUE(ctx, g);
 	ROCINANTE_EXPECT_EQ_U64(ctx, cache_field, static_cast<std::uint64_t>(CacheMode::CoherentCached));
 }
 
