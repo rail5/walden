@@ -8,6 +8,7 @@
 #include <src/sp/cpucfg.h>
 
 #include <src/memory/boot_memory_map.h>
+#include <src/memory/address_space.h>
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
 #include <src/memory/virtual_layout.h>
@@ -151,6 +152,73 @@ static void Test_Paging_UnmapReclaimsIntermediateTables(TestContext* ctx) {
 	// Unmapping the last page should reclaim the now-empty subtree.
 	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root_or.value(), kVirtualPageBase1, bits));
 	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before_map);
+
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePage(backing_physical));
+}
+
+static void Test_AddressSpace_DestroyPageTables_FreesRootAndSubtables(TestContext* ctx) {
+	using Rocinante::Memory::AddressSpace;
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::PagePermissions;
+
+	// Regression guard:
+	// Destroying an address space should reclaim the root page-table page, not
+	// only intermediate tables reclaimed by per-page unmap.
+
+	static constexpr std::uintptr_t kUsableBase = 0x01000000;
+	static constexpr std::size_t kUsableSizeBytes = 128 * PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uintptr_t kKernelBase = 0x00600000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00601000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00700000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	const AddressSpaceBits bits{.virtual_address_bits = 39, .physical_address_bits = 44};
+	static constexpr std::uint16_t kAsid = 1;
+
+	const std::size_t free_before_create = pmm.FreePages();
+	auto as_or = AddressSpace::Create(&pmm, bits, kAsid);
+	ROCINANTE_EXPECT_TRUE(ctx, as_or.has_value());
+	if (!as_or.has_value()) return;
+	AddressSpace address_space = as_or.value();
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before_create - 1);
+
+	const auto backing_page_or = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, backing_page_or.has_value());
+	if (!backing_page_or.has_value()) return;
+	const std::uintptr_t backing_physical = backing_page_or.value();
+
+	const PagePermissions permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	static constexpr std::uintptr_t kVirtualPageBase = 0x0000000000200000ull;
+	const std::size_t free_before_map = pmm.FreePages();
+	ROCINANTE_EXPECT_TRUE(ctx, address_space.MapPage4KiB(&pmm, kVirtualPageBase, backing_physical, permissions));
+	const std::size_t free_after_map = pmm.FreePages();
+	ROCINANTE_EXPECT_TRUE(ctx, free_after_map <= free_before_map);
+
+	// For VALEN=39 with 4 KiB pages, the software paging builder uses 3 levels:
+	// root + one directory + one leaf table.
+	static constexpr std::size_t kExpectedPageTablePagesFreed = 3;
+	ROCINANTE_EXPECT_TRUE(ctx, address_space.DestroyPageTables(&pmm));
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_after_map + kExpectedPageTablePagesFreed);
 
 	ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePage(backing_physical));
 }
@@ -429,6 +497,10 @@ void TestEntry_Paging_MapTranslateUnmap(TestContext* ctx) {
 
 void TestEntry_Paging_UnmapReclaimsIntermediateTables(TestContext* ctx) {
 	Test_Paging_UnmapReclaimsIntermediateTables(ctx);
+}
+
+void TestEntry_AddressSpace_DestroyPageTables_FreesRootAndSubtables(TestContext* ctx) {
+	Test_AddressSpace_DestroyPageTables_FreesRootAndSubtables(ctx);
 }
 
 void TestEntry_Paging_RespectsVALENAndPALEN(TestContext* ctx) {

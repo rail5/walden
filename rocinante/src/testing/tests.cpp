@@ -17,6 +17,7 @@ void TestEntry_Paging_MapTranslateUnmap(TestContext* ctx);
 void TestEntry_Paging_RespectsVALENAndPALEN(TestContext* ctx);
 void TestEntry_Paging_Physmap_MapsRootPageTableAndAttributes(TestContext* ctx);
 void TestEntry_Paging_UnmapReclaimsIntermediateTables(TestContext* ctx);
+void TestEntry_AddressSpace_DestroyPageTables_FreesRootAndSubtables(TestContext* ctx);
 
 void TestEntry_KernelVirtualAddressAllocator_AllocateFreeCoalesce(TestContext* ctx);
 void TestEntry_KernelVirtualAddressAllocator_ReserveCarvesFixedRange(TestContext* ctx);
@@ -52,6 +53,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.Paging.RespectsVALENAndPALEN", &TestEntry_Paging_RespectsVALENAndPALEN},
 	{"Memory.Paging.Physmap.MapsRootAndAttributes", &TestEntry_Paging_Physmap_MapsRootPageTableAndAttributes},
 	{"Memory.Paging.UnmapReclaimsIntermediateTables", &TestEntry_Paging_UnmapReclaimsIntermediateTables},
+	{"Memory.AddressSpace.DestroyPageTables.FreesRootAndSubtables", &TestEntry_AddressSpace_DestroyPageTables_FreesRootAndSubtables},
 	{"Memory.KernelVirtualAddressAllocator.AllocateFreeCoalesce", &TestEntry_KernelVirtualAddressAllocator_AllocateFreeCoalesce},
 	{"Memory.KernelVirtualAddressAllocator.ReserveCarvesFixedRange", &TestEntry_KernelVirtualAddressAllocator_ReserveCarvesFixedRange},
 	{"Memory.KernelMappings.MapTranslateUnmapAndFree", &TestEntry_KernelMappings_MapTranslateUnmapAndFree},

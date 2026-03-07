@@ -35,6 +35,7 @@ class Uart16550 final {
 		//
 		// Note: the implementation uses MMIO<8> accesses, so each register access
 		// touches exactly one byte at base+offset.
+		static constexpr std::size_t MMIO_REQUIRED_BYTES = static_cast<std::size_t>(OFFSET_LINE_STATUS) + 1u;
 
 		// Receive ring buffer for incoming data
 		static constexpr std::uint32_t RECEIVE_BUFFER_SIZE = 1024;
@@ -50,7 +51,7 @@ class Uart16550 final {
 
 		// Minimal byte span (starting at the UART base address) that must be mapped
 		// for this driver to function.
-		static constexpr std::size_t kMmioRequiredBytes = static_cast<std::size_t>(OFFSET_LINE_STATUS) + 1u;
+		static constexpr std::size_t kMmioRequiredBytes = MMIO_REQUIRED_BYTES;
 
 		Uart16550(const Uart16550&) = delete;
 		Uart16550& operator=(const Uart16550&) = delete;

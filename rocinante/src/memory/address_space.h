@@ -26,7 +26,7 @@ class PhysicalMemoryManager;
  * Non-goals (explicit for now):
  * - No VMA model (regions, permissions policy, accounting).
  * - No user/kernel split policy.
- * - No teardown that reclaims mapped frames or the root page table.
+ * - Teardown only frees page-table pages; it does not reclaim mapped frames.
  * - No SMP safety.
  */
 class AddressSpace final {
@@ -54,6 +54,20 @@ public:
 		Paging::PagePermissions permissions) const;
 
 	bool UnmapPage4KiB(PhysicalMemoryManager* physical_memory_manager, std::uintptr_t virtual_address) const;
+
+	/**
+	 * @brief Destroys the address space's low-half page tables and frees the table pages back to the PMM.
+	 *
+	 * Semantics:
+	 * - Frees the root page-table page and all intermediate/leaf page-table pages.
+	 * - Does NOT free mapped physical frames referenced by leaf PTEs.
+	 *
+	 * Safety requirements:
+	 * - The address space must be inactive; no CPU may continue to use its ASID/root.
+	 * - This uses a coarse TLB invalidation policy (flush-all) as a bring-up
+	 *   safety measure; per-ASID invalidation should replace it once available.
+	 */
+	bool DestroyPageTables(PhysicalMemoryManager* physical_memory_manager);
 
 private:
 	AddressSpace(Paging::PageTableRoot low_half_root, Paging::AddressSpaceBits address_bits, std::uint16_t address_space_id)

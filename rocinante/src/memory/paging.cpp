@@ -316,6 +316,40 @@ static bool ValidatePhysicalAddress(std::uintptr_t physical_address, const Layou
 	return (static_cast<std::uint64_t>(physical_address) & ~layout.physical_address_mask) == 0;
 }
 
+static bool FreeAllPageTablesRecursive(
+	PhysicalMemoryManager* pmm,
+	std::uintptr_t table_physical_base,
+	const Layout& layout,
+	std::size_t level
+) {
+	if (!pmm) return false;
+	if (!IsPageAligned(table_physical_base)) return false;
+
+	auto* table = PageTablePageFromPhysical(table_physical_base);
+	if (!table) return false;
+
+	// For non-leaf levels, directory entries point at lower-level tables.
+	// This walker does not support huge-page directory entries.
+	if (level > 0) {
+		for (std::size_t i = 0; i < kEntriesPerTable; i++) {
+			const std::uint64_t entry = table->entries[i];
+			if (!EntryIsPresent(entry)) continue;
+
+			// In the LoongArch privileged spec, bit 6 set in a directory entry
+			// indicates a huge-page mapping. We do not support huge pages yet.
+			if ((entry & PteBits::kGlobal) != 0) return false;
+
+			const std::uintptr_t child_physical = EntryPhysicalPageBase(entry, layout.physical_page_base_mask);
+			if (!FreeAllPageTablesRecursive(pmm, child_physical, layout, level - 1)) return false;
+			table->entries[i] = 0;
+		}
+	}
+
+	// Leaf PTEs map physical frames. We intentionally do not free those frames
+	// here; we only free the page-table page itself.
+	return pmm->FreePage(table_physical_base);
+}
+
 } // namespace
 
 Rocinante::Optional<PageTableRoot> AllocateRootPageTable(PhysicalMemoryManager* pmm) {
@@ -330,6 +364,28 @@ Rocinante::Optional<PageTableRoot> AllocateRootPageTable(PhysicalMemoryManager* 
 	(void)memset(root, 0, sizeof(PageTablePage));
 
 	return PageTableRoot{.root_physical_address = root_physical_base};
+}
+
+bool FreeAllPageTables4KiB(
+	PhysicalMemoryManager* pmm,
+	const PageTableRoot& root,
+	AddressSpaceBits address_bits
+) {
+	if (!pmm) return false;
+	const auto layout_opt = BuildLayout(address_bits);
+	if (!layout_opt.has_value()) return false;
+	const Layout layout = layout_opt.value();
+	if (layout.level_count == 0) return false;
+	if (layout.level_count > kMaxSupportedLevelCount) return false;
+
+	if (root.root_physical_address == 0) return false;
+	if (!IsPageAligned(root.root_physical_address)) return false;
+
+	return FreeAllPageTablesRecursive(
+		pmm,
+		root.root_physical_address,
+		layout,
+		static_cast<std::size_t>(layout.level_count - 1));
 }
 
 bool MapRange4KiB(

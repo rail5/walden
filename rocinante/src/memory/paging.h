@@ -211,6 +211,24 @@ Rocinante::Optional<std::uintptr_t> Translate(
 Rocinante::Optional<PageTableRoot> AllocateRootPageTable(PhysicalMemoryManager* pmm);
 
 /**
+ * @brief Frees all page-table pages for the supplied root (including the root itself).
+ *
+ * Important semantics:
+ * - This frees *page-table pages only* (root + intermediate + leaf tables).
+ * - It does NOT free mapped physical frames referenced by leaf PTEs.
+ *
+ * Ordering / safety requirements:
+ * - Callers must ensure the address space is inactive and that any stale TLB
+ *   translations for the address space will not be used. If the ASID/root may
+ *   be reused, callers should invalidate relevant TLB entries first.
+ */
+bool FreeAllPageTables4KiB(
+	PhysicalMemoryManager* pmm,
+	const PageTableRoot& root,
+	AddressSpaceBits address_bits
+);
+
+/**
  * @brief Maps a contiguous range using 4 KiB pages.
  *
  * Requirements:
