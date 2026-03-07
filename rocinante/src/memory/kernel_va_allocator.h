@@ -133,6 +133,81 @@ class KernelVirtualAddressAllocator final {
 			return Rocinante::nullopt;
 		}
 
+		// Reserves a fixed virtual address range, removing it from the allocator.
+		//
+		// Use this to carve out fixed-policy regions (e.g. kernel image window,
+		// physmap window, MMIO ranges) before doing general Allocate() calls.
+		//
+		// Returns false if any part of the range is not currently free.
+		bool Reserve(std::uintptr_t base, std::size_t size_bytes) {
+			if (!IsInitialized()) return false;
+			if (size_bytes == 0) return false;
+
+			const std::uintptr_t limit = base + static_cast<std::uintptr_t>(size_bytes);
+			if (limit < base) return false;
+			if (base < m_managed_base || limit > m_managed_limit) return false;
+
+			// First pass: confirm the full reservation range is currently free.
+			std::uintptr_t cursor = base;
+			std::size_t index = 0;
+			while (index < m_free_range_count && m_free_ranges[index].limit <= cursor) {
+				index++;
+			}
+			while (cursor < limit) {
+				if (index >= m_free_range_count) return false;
+
+				const Range range = m_free_ranges[index];
+				if (range.base > cursor) return false;
+				if (range.limit <= cursor) {
+					index++;
+					continue;
+				}
+
+				const std::uintptr_t advanced = (range.limit < limit) ? range.limit : limit;
+				cursor = advanced;
+				if (cursor < limit) {
+					// We require contiguity across free ranges.
+					index++;
+					if (index >= m_free_range_count) return false;
+					if (m_free_ranges[index].base != cursor) return false;
+				}
+			}
+
+			// Second pass: remove the reserved range from the free list.
+			std::size_t i = 0;
+			while (i < m_free_range_count) {
+				const Range range = m_free_ranges[i];
+				if (range.limit <= base) {
+					i++;
+					continue;
+				}
+				if (range.base >= limit) {
+					break;
+				}
+
+				const Range left = (range.base < base)
+					? Range{.base = range.base, .limit = base}
+					: Range{};
+				const Range right = (range.limit > limit)
+					? Range{.base = limit, .limit = range.limit}
+					: Range{};
+
+				RemoveFreeRangeAt(i);
+
+				std::size_t insert_index = i;
+				if (left.IsValidNonEmpty()) {
+					if (!InsertFreeRangeAt(insert_index, left)) return false;
+					insert_index++;
+				}
+				if (right.IsValidNonEmpty()) {
+					if (!InsertFreeRangeAt(insert_index, right)) return false;
+				}
+				i = insert_index;
+			}
+
+			return true;
+		}
+
 		bool Free(std::uintptr_t base, std::size_t size_bytes) {
 			if (!IsInitialized()) return false;
 			if (size_bytes == 0) return false;

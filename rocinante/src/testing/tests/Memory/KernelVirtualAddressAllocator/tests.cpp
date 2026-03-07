@@ -41,10 +41,44 @@ static void Test_KernelVirtualAddressAllocator_AllocateFreeCoalesce(TestContext*
 	ROCINANTE_EXPECT_TRUE(ctx, !allocator.Free(merged_or.value(), 0x2000));
 }
 
+static void Test_KernelVirtualAddressAllocator_ReserveCarvesFixedRange(TestContext* ctx) {
+	using Rocinante::Memory::KernelVirtualAddressAllocator;
+
+	KernelVirtualAddressAllocator allocator;
+	allocator.Init(0x1000, 0x9000);
+	ROCINANTE_EXPECT_TRUE(ctx, allocator.IsInitialized());
+
+	// Reserve a fixed range out of the middle.
+	ROCINANTE_EXPECT_TRUE(ctx, allocator.Reserve(0x3000, 0x2000)); // [0x3000, 0x5000)
+
+	// Allocations should not land inside the reserved hole.
+	const auto a_or = allocator.Allocate(0x1000, 0x1000);
+	ROCINANTE_EXPECT_TRUE(ctx, a_or.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, a_or.value(), 0x1000);
+
+	const auto b_or = allocator.Allocate(0x1000, 0x1000);
+	ROCINANTE_EXPECT_TRUE(ctx, b_or.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, b_or.value(), 0x2000);
+
+	const auto c_or = allocator.Allocate(0x1000, 0x1000);
+	ROCINANTE_EXPECT_TRUE(ctx, c_or.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, c_or.value(), 0x5000);
+
+	// Cannot reserve a range that is already allocated.
+	ROCINANTE_EXPECT_TRUE(ctx, !allocator.Reserve(0x1000, 0x1000));
+
+	// Cannot reserve a range that overlaps an existing reservation.
+	ROCINANTE_EXPECT_TRUE(ctx, !allocator.Reserve(0x4000, 0x2000));
+}
+
 } // namespace
 
 void TestEntry_KernelVirtualAddressAllocator_AllocateFreeCoalesce(TestContext* ctx) {
 	Test_KernelVirtualAddressAllocator_AllocateFreeCoalesce(ctx);
+}
+
+void TestEntry_KernelVirtualAddressAllocator_ReserveCarvesFixedRange(TestContext* ctx) {
+	Test_KernelVirtualAddressAllocator_ReserveCarvesFixedRange(ctx);
 }
 
 } // namespace Rocinante::Testing

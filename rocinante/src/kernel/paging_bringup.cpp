@@ -485,7 +485,18 @@ void RunPagingBringup(
 		if (kernel_higher_half_end >= physmap_base) {
 			uart.puts("Paging bring-up: no VA space between higher-half kernel and physmap; skipping stack/heap mapping\n");
 		} else {
-			kernel_va.Init(kernel_higher_half_end, physmap_base);
+			// Use the VA region manager to make collisions explicit:
+			// - Manage the full [kernel_higher_half_base, physmap_base) gap.
+			// - Reserve the kernel image window inside it.
+			//	This should be behavior-neutral for current bring-up because the first
+			//	post-kernel allocation still begins at kernel_higher_half_end.
+			kernel_va.Init(kernel_higher_half_base, physmap_base);
+			const std::size_t kernel_higher_half_size_bytes =
+				static_cast<std::size_t>(kernel_higher_half_end - kernel_higher_half_base);
+			if (!kernel_va.Reserve(kernel_higher_half_base, kernel_higher_half_size_bytes)) {
+				uart.puts("Paging bring-up: WARNING: failed to reserve kernel higher-half VA window; falling back\n");
+				kernel_va.Init(kernel_higher_half_end, physmap_base);
+			}
 		}
 	}
 
