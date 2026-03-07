@@ -9,6 +9,7 @@
 #include <src/trap/trap.h>
 
 #include <src/memory/boot_memory_map.h>
+#include <src/memory/address_space.h>
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
 #include <src/memory/paging_hw.h>
@@ -519,6 +520,191 @@ static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
 	auto* post_paging_virtual_u64 = reinterpret_cast<volatile std::uint64_t*>(kPostPagingVirtualPageBase);
 	*post_paging_virtual_u64 = 0x0ddc0ffeebadf00dull;
 	ROCINANTE_EXPECT_EQ_U64(ctx, *post_paging_virtual_u64, 0x0ddc0ffeebadf00dull);
+}
+
+static void Test_PagingHw_AddressSpaces_SwitchPgdlChangesTranslation(TestContext* ctx) {
+	using Rocinante::Memory::AddressSpace;
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::PagePermissions;
+
+	// This is an end-to-end test for the most primitive form of “multiple address spaces”:
+	// switching CSR.PGDL (low-half root) + CSR.ASID changes the translation for a low-half VA.
+	//
+	// Why this is useful even without a scheduler:
+	// - It validates the hardware mechanism for address-space switching.
+	// - It lets us build VMM/user-space abstractions without committing to threads.
+	//
+	// Requirements:
+	// - Paging must already be enabled by the earlier smoke test.
+	// - The kernel image is executing from a low-half identity mapping in tests,
+	//   so BOTH roots must map the kernel image + MMIO + physmap.
+	if (g_paging_hw_virtual_address_bits == 0 || g_paging_hw_physical_address_bits == 0) {
+		Rocinante::Testing::Fail(ctx, __FILE__, __LINE__, "paging not enabled / address bits not initialized");
+		return;
+	}
+
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = g_paging_hw_virtual_address_bits,
+		.physical_address_bits = g_paging_hw_physical_address_bits,
+	};
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+
+	// Create two address spaces with different ASIDs.
+	static constexpr std::uint16_t kAsidA = 1;
+	static constexpr std::uint16_t kAsidB = 2;
+
+	const auto address_space_a_or = AddressSpace::Create(&pmm, address_bits, kAsidA);
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_a_or.has_value());
+	if (!address_space_a_or.has_value()) return;
+	const auto address_space_b_or = AddressSpace::Create(&pmm, address_bits, kAsidB);
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_b_or.has_value());
+	if (!address_space_b_or.has_value()) return;
+
+	const AddressSpace address_space_a = address_space_a_or.value();
+	const AddressSpace address_space_b = address_space_b_or.value();
+
+	const PagePermissions kernel_identity_permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::Executable,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	const PagePermissions mmio_permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::StrongUncached,
+		.global = true,
+	};
+
+	const PagePermissions physmap_permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	// Map the kernel image identity range into both roots.
+	const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+	const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+	ROCINANTE_EXPECT_TRUE(ctx, kernel_physical_end > kernel_physical_base);
+
+	const std::uintptr_t kernel_size_bytes = kernel_physical_end - kernel_physical_base;
+	const std::size_t kernel_size_rounded =
+		static_cast<std::size_t>((kernel_size_bytes + Rocinante::Memory::Paging::kPageSizeBytes - 1) &
+			~(Rocinante::Memory::Paging::kPageSizeBytes - 1));
+
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_a.MapRange4KiB(
+		&pmm,
+		kernel_physical_base,
+		kernel_physical_base,
+		kernel_size_rounded,
+		kernel_identity_permissions));
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_b.MapRange4KiB(
+		&pmm,
+		kernel_physical_base,
+		kernel_physical_base,
+		kernel_size_rounded,
+		kernel_identity_permissions));
+
+	// Map MMIO pages needed for test logging/shutdown.
+	static constexpr std::uintptr_t kUartPhysicalBase = 0x1fe001e0ull;
+	static constexpr std::uintptr_t kSysconPhysicalBase = 0x100e001cull;
+	const std::uintptr_t uart_page_base = kUartPhysicalBase & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+	const std::uintptr_t syscon_page_base = kSysconPhysicalBase & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_a.MapRange4KiB(
+		&pmm, uart_page_base, uart_page_base, Rocinante::Memory::Paging::kPageSizeBytes, mmio_permissions));
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_b.MapRange4KiB(
+		&pmm, uart_page_base, uart_page_base, Rocinante::Memory::Paging::kPageSizeBytes, mmio_permissions));
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_a.MapRange4KiB(
+		&pmm, syscon_page_base, syscon_page_base, Rocinante::Memory::Paging::kPageSizeBytes, mmio_permissions));
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_b.MapRange4KiB(
+		&pmm, syscon_page_base, syscon_page_base, Rocinante::Memory::Paging::kPageSizeBytes, mmio_permissions));
+
+	// Map a physmap window that covers the PMM-tracked range for page-table access in mapped mode.
+	// This must exist in BOTH roots, because switching PGDL changes the mappings used for the physmap.
+	static constexpr std::uintptr_t kTrackedPhysicalBase = 0x01000000ull; // 16 MiB (matches earlier paging smoke test)
+	static constexpr std::size_t kTrackedSizeBytes = 32u * 1024u * 1024u; // 32 MiB
+	const std::uintptr_t physmap_virtual_base =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(kTrackedPhysicalBase, address_bits.virtual_address_bits);
+
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_a.MapRange4KiB(
+		&pmm,
+		physmap_virtual_base,
+		kTrackedPhysicalBase,
+		kTrackedSizeBytes,
+		physmap_permissions));
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_b.MapRange4KiB(
+		&pmm,
+		physmap_virtual_base,
+		kTrackedPhysicalBase,
+		kTrackedSizeBytes,
+		physmap_permissions));
+
+	// Allocate two different physical pages and fill them with different sentinel values.
+	const auto page_a_or = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, page_a_or.has_value());
+	if (!page_a_or.has_value()) return;
+	const auto page_b_or = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, page_b_or.has_value());
+	if (!page_b_or.has_value()) return;
+
+	static constexpr std::uint64_t kSentinelA = 0xaaaaaaaaaaaaaaaaull;
+	static constexpr std::uint64_t kSentinelB = 0xbbbbbbbbbbbbbbbbull;
+	const std::uintptr_t page_a_phys = page_a_or.value();
+	const std::uintptr_t page_b_phys = page_b_or.value();
+	const std::uintptr_t page_a_virt =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(page_a_phys, address_bits.virtual_address_bits);
+	const std::uintptr_t page_b_virt =
+		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(page_b_phys, address_bits.virtual_address_bits);
+	*reinterpret_cast<volatile std::uint64_t*>(page_a_virt) = kSentinelA;
+	*reinterpret_cast<volatile std::uint64_t*>(page_b_virt) = kSentinelB;
+
+	// Map the same low-half VA to different physical pages.
+	static constexpr std::uintptr_t kTestVirtualPageBase = kPagingHwScratchVirtualPageBase;
+	static_assert((kTestVirtualPageBase % Rocinante::Memory::Paging::kPageSizeBytes) == 0);
+
+	const PagePermissions user_page_permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = false,
+	};
+
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_a.MapPage4KiB(&pmm, kTestVirtualPageBase, page_a_phys, user_page_permissions));
+	ROCINANTE_EXPECT_TRUE(ctx, address_space_b.MapPage4KiB(&pmm, kTestVirtualPageBase, page_b_phys, user_page_permissions));
+
+	// Save current context so we can restore after the test.
+	// CSR numbering matches the LoongArch privileged architecture spec.
+	// - CSR.PGDL is 0x19
+	// - CSR.ASID is 0x18
+	static constexpr std::uint32_t kCsrAsid = 0x18;
+	static constexpr std::uint32_t kCsrPgdl = 0x19;
+	std::uint64_t old_asid;
+	std::uint64_t old_pgdl;
+	asm volatile("csrrd %0, %1" : "=r"(old_asid) : "i"(kCsrAsid));
+	asm volatile("csrrd %0, %1" : "=r"(old_pgdl) : "i"(kCsrPgdl));
+
+	// Switch to A and observe sentinel A.
+	Rocinante::Memory::PagingHw::ActivateLowHalfAddressSpace(address_space_a.LowHalfRoot(), address_space_a.AddressSpaceId());
+	const std::uint64_t observed_a = *reinterpret_cast<volatile std::uint64_t*>(kTestVirtualPageBase);
+	ROCINANTE_EXPECT_EQ_U64(ctx, observed_a, kSentinelA);
+
+	// Switch to B and observe sentinel B.
+	Rocinante::Memory::PagingHw::ActivateLowHalfAddressSpace(address_space_b.LowHalfRoot(), address_space_b.AddressSpaceId());
+	const std::uint64_t observed_b = *reinterpret_cast<volatile std::uint64_t*>(kTestVirtualPageBase);
+	ROCINANTE_EXPECT_EQ_U64(ctx, observed_b, kSentinelB);
+
+	// Restore the previous address space/root.
+	asm volatile("csrwr %0, %1" :: "r"(old_asid), "i"(kCsrAsid));
+	asm volatile("csrwr %0, %1" :: "r"(old_pgdl), "i"(kCsrPgdl));
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
 }
 
 static void Test_PagingHw_PostPaging_MapUnmap_Faults(TestContext* ctx) {
@@ -1209,6 +1395,10 @@ void TestEntry_PagingHw_PostPaging_MapUnmap_Faults(TestContext* ctx) {
 
 void TestEntry_PagingHw_HigherHalfStack_GuardPageFaults(TestContext* ctx) {
 	Test_PagingHw_HigherHalfStack_GuardPageFaults(ctx);
+}
+
+void TestEntry_PagingHw_AddressSpaces_SwitchPgdlChangesTranslation(TestContext* ctx) {
+	Test_PagingHw_AddressSpaces_SwitchPgdlChangesTranslation(ctx);
 }
 
 void TestEntry_PagingHw_UnmappedAccess_FaultsAndReportsBadV(TestContext* ctx) {

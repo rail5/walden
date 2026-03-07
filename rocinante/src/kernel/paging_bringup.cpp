@@ -7,6 +7,8 @@
 
 #include <src/memory/memory.h>
 #include <src/memory/heap.h>
+#include <src/memory/address_space.h>
+#include <src/memory/kernel_pager.h>
 #include <src/memory/kernel_mappings.h>
 #include <src/memory/kernel_va_allocator.h>
 #include <src/memory/paging.h>
@@ -38,6 +40,22 @@ extern "C" void __exception_entry();
 // higher-half stack.
 static std::uintptr_t g_paging_bringup_heap_virtual_base = 0;
 static std::size_t g_paging_bringup_heap_size_bytes = 0;
+
+// Bring-up lazy-mapped range serviced by the kernel pager.
+//
+// This is a reserved VA range (allocated from the kernel VA allocator) that is
+// intentionally left unmapped so that a controlled page-fault can validate the
+// paging-fault observer + retry mechanism.
+static std::uintptr_t g_paging_bringup_lazy_virtual_base = 0;
+static std::size_t g_paging_bringup_lazy_size_bytes = 0;
+
+// Higher-half MMIO aliases.
+//
+// These are populated while constructing the bootstrap page tables, then used
+// after higher-half entry to retarget early MMIO pointers away from the low
+// half so PGDL can be switched to an empty address space.
+static std::uintptr_t g_paging_bringup_uart_mmio_virtual_base = 0;
+static std::uintptr_t g_paging_bringup_syscon_mmio_virtual_base = 0;
 
 // Post-paging continuation.
 //
@@ -135,6 +153,39 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 	} else {
 		uart.puts("Paging bring-up: heap after paging not configured; skipping heap handoff\n");
 	}
+
+	#if !defined(ROCINANTE_TESTS)
+	// Install a minimal kernel pager (paging-fault recovery policy).
+	//
+	// Spec anchors (LoongArch-Vol1-EN.html):
+	// - Section 4.2.6.1 (ERTN): returning from a general exception resumes at CSR.ERA.
+	// - Section 4.2.4.7 (INVTLB) + Table 13: after changing page tables, invalidate
+	//   TLB entries to maintain consistency.
+	//
+	// Bring-up policy:
+	// - Service only the reserved lazy VA range (if configured).
+	// - Everything else remains "log + halt".
+	if (g_paging_bringup_lazy_virtual_base != 0 && g_paging_bringup_lazy_size_bytes != 0) {
+		Rocinante::Memory::KernelPager::ConfigureLazyMappingRegion(
+			Rocinante::Memory::KernelPager::LazyMappingRegion{
+				.virtual_base = g_paging_bringup_lazy_virtual_base,
+				.size_bytes = g_paging_bringup_lazy_size_bytes,
+			}
+		);
+	}
+	Rocinante::Memory::KernelPager::Install();
+
+	// Pager self-check: trigger one controlled page-invalid store in the lazy range.
+	if (g_paging_bringup_lazy_virtual_base != 0 && g_paging_bringup_lazy_size_bytes != 0) {
+		uart.puts("Paging bring-up: kernel pager lazy-map self-check begin\n");
+		volatile std::uint64_t* p = reinterpret_cast<volatile std::uint64_t*>(g_paging_bringup_lazy_virtual_base);
+		*p = 0x1122334455667788ull;
+		const std::uint64_t readback = *p;
+		uart.puts("Paging bring-up: kernel pager lazy-map self-check ok; readback=");
+		uart.write_hex_u64(readback);
+		uart.putc('\n');
+	}
+	#endif
 
 	// Post-paging software-walker self-check.
 	//
@@ -270,8 +321,105 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 	// kernel proper in mapped mode.
 	//
 	// Spec anchor (LoongArch-Vol1-EN.html):
-	// - Section 7.5.6 (PGDH): the higher half is selected when VA[VALEN-1]==1.
-	//   We therefore jump to a higher-half alias of the continuation.
+	// - Section 5.4.5 (Multi-level Page Table Structure Supported by page walking):
+	//   the PGD is selected by the high bit of the queried VA; if VA[VALEN-1]==0,
+	//   it comes from CSR.PGDL, otherwise from CSR.PGDH.
+	// - Section 7.5.5 (PGDL): low-half root base.
+	// - Section 7.5.6 (PGDH): high-half root base.
+	// - Section 7.5.4 (ASID): ASID is used as the key for TLB-related operations.
+	//
+	// Bring-up policy:
+	// - After higher-half entry and after tearing down the low kernel identity
+	//   mapping, switch PGDL to a fresh minimal low-half address space.
+	// - Keep PGDH unchanged (kernel higher-half mappings).
+	//
+	// Practical constraint:
+	// - During the brief window right after paging is enabled, existing MMIO
+	//   pointers still refer to low virtual addresses; we keep identity mappings
+	//   alive for that window.
+	// - After higher-half entry, we retarget those pointers to higher-half MMIO
+	//   aliases and then switch PGDL to a truly empty address space.
+	#if !defined(ROCINANTE_TESTS)
+	if (paging_state && paging_state->address_bits.virtual_address_bits != 0 && paging_state->address_bits.physical_address_bits != 0) {
+		auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+
+		uart.puts("Paging bring-up: activating minimal low-half address space (PGDL switch)\n");
+
+		if (g_paging_bringup_uart_mmio_virtual_base != 0) {
+			uart.puts("Paging bring-up: retargeting early UART MMIO base to higher-half alias; uart_mmio=");
+			uart.write_dec_u64(g_paging_bringup_uart_mmio_virtual_base);
+			uart.putc('\n');
+			uart.set_base_address(g_paging_bringup_uart_mmio_virtual_base);
+		} else {
+			uart.puts("Paging bring-up: WARNING: no higher-half UART MMIO alias; keeping low-half UART base\n");
+		}
+
+		if (g_paging_bringup_syscon_mmio_virtual_base != 0) {
+			uart.puts("Paging bring-up: retargeting syscon-poweroff MMIO base to higher-half alias; syscon_mmio=");
+			uart.write_dec_u64(g_paging_bringup_syscon_mmio_virtual_base);
+			uart.putc('\n');
+			Rocinante::Platform::SetSysconBaseAddress(g_paging_bringup_syscon_mmio_virtual_base);
+		} else {
+			uart.puts("Paging bring-up: WARNING: no higher-half syscon MMIO alias; keeping low-half syscon base\n");
+		}
+
+		static constexpr std::uint16_t kBringupLowHalfAsid = 1;
+		const auto low_as_or = Rocinante::Memory::AddressSpace::Create(&pmm, paging_state->address_bits, kBringupLowHalfAsid);
+		if (!low_as_or.has_value()) {
+			uart.puts("Paging bring-up: failed to allocate low-half address space root\n");
+			Rocinante::Platform::Halt();
+		}
+		const auto low_as = low_as_or.value();
+
+		// If higher-half MMIO aliases were not created, we must keep low-half MMIO
+		// mappings alive (bring-up fallback).
+		if (g_paging_bringup_uart_mmio_virtual_base == 0 || g_paging_bringup_syscon_mmio_virtual_base == 0) {
+			Rocinante::Memory::Paging::PagePermissions mmio_permissions{
+				.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
+				.execute = Rocinante::Memory::Paging::ExecutePermissions::NoExecute,
+				.cache = Rocinante::Memory::Paging::CacheMode::StrongUncached,
+				.global = true,
+			};
+
+			const std::uintptr_t uart_page_base =
+				Rocinante::Platform::QemuVirt::kUartBase & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+			const std::uintptr_t syscon_page_base =
+				Rocinante::Platform::QemuVirt::kSysconBase & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
+
+			if (!low_as.MapRange4KiB(
+				&pmm,
+				uart_page_base,
+				uart_page_base,
+				Rocinante::Memory::Paging::kPageSizeBytes,
+				mmio_permissions
+			)) {
+				uart.puts("Paging bring-up: failed to map UART MMIO into minimal low-half address space\n");
+				Rocinante::Platform::Halt();
+			}
+
+			if (!low_as.MapRange4KiB(
+				&pmm,
+				syscon_page_base,
+				syscon_page_base,
+				Rocinante::Memory::Paging::kPageSizeBytes,
+				mmio_permissions
+			)) {
+				uart.puts("Paging bring-up: failed to map syscon MMIO into minimal low-half address space\n");
+				Rocinante::Platform::Halt();
+			}
+		}
+
+		uart.puts("Paging bring-up: switching ASID+PGDL; asid=");
+		uart.write_dec_u64(low_as.AddressSpaceId());
+		uart.puts(" pgdl_root_pt_phys=");
+		uart.write_dec_u64(low_as.LowHalfRoot().root_physical_address);
+		uart.putc('\n');
+		Rocinante::Memory::PagingHw::ActivateLowHalfAddressSpace(low_as.LowHalfRoot(), low_as.AddressSpaceId());
+		uart.puts("Paging bring-up: minimal low-half address space active\n");
+	}
+	#endif
+
+	// We now jump to a higher-half alias of the continuation.
 	if (g_post_paging_continuation_low != 0 && paging_state && paging_state->address_bits.virtual_address_bits != 0) {
 		const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
 		const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
@@ -545,6 +693,67 @@ void RunPagingBringup(
 		uart.puts("Paging bring-up: failed to map syscon-poweroff MMIO page\n");
 	}
 
+	// Also map higher-half aliases for UART + syscon and record their addresses.
+	//
+	// Bring-up goal:
+	// - Stop relying on *low-half* MMIO identity mappings after higher-half entry,
+	//   so we can switch PGDL to an empty address space without breaking debug
+	//   output or poweroff.
+	if (!kernel_va.IsInitialized()) {
+		uart.puts("Paging bring-up: WARNING: kernel VA allocator not initialized; skipping higher-half MMIO aliases\n");
+	} else {
+		const std::size_t kPageSize = Rocinante::Memory::Paging::kPageSizeBytes;
+		const auto uart_alias_page_or = kernel_va.Allocate(kPageSize, kPageSize);
+		const auto syscon_alias_page_or = kernel_va.Allocate(kPageSize, kPageSize);
+		if (!uart_alias_page_or.has_value() || !syscon_alias_page_or.has_value()) {
+			uart.puts("Paging bring-up: WARNING: failed to allocate higher-half VA for MMIO aliases\n");
+		} else {
+			const std::uintptr_t uart_alias_page = uart_alias_page_or.value();
+			const std::uintptr_t syscon_alias_page = syscon_alias_page_or.value();
+
+			const std::uintptr_t uart_offset = UART_BASE - uart_page_base;
+			const std::uintptr_t syscon_offset = kSysconBase - syscon_page_base;
+
+			if (!Rocinante::Memory::Paging::MapRange4KiB(
+				&pmm,
+				root,
+				uart_alias_page,
+				uart_page_base,
+				kPageSize,
+				mmio_permissions,
+				address_bits
+			)) {
+				uart.puts("Paging bring-up: WARNING: failed to map higher-half UART MMIO alias\n");
+			} else {
+				g_paging_bringup_uart_mmio_virtual_base = uart_alias_page + uart_offset;
+			}
+
+			if (!Rocinante::Memory::Paging::MapRange4KiB(
+				&pmm,
+				root,
+				syscon_alias_page,
+				syscon_page_base,
+				kPageSize,
+				mmio_permissions,
+				address_bits
+			)) {
+				uart.puts("Paging bring-up: WARNING: failed to map higher-half syscon MMIO alias\n");
+			} else {
+				g_paging_bringup_syscon_mmio_virtual_base = syscon_alias_page + syscon_offset;
+			}
+
+			if (g_paging_bringup_uart_mmio_virtual_base != 0 && g_paging_bringup_syscon_mmio_virtual_base != 0) {
+				uart.puts("Paging bring-up: higher-half MMIO aliases mapped; uart_mmio=");
+				uart.write_dec_u64(g_paging_bringup_uart_mmio_virtual_base);
+				uart.puts(" syscon_mmio=");
+				uart.write_dec_u64(g_paging_bringup_syscon_mmio_virtual_base);
+				uart.putc('\n');
+			} else {
+				uart.puts("Paging bring-up: WARNING: incomplete higher-half MMIO alias mapping\n");
+			}
+		}
+	}
+
 	// Allocate and map a higher-half kernel stack region.
 	//
 	// Spec-driven constraint:
@@ -654,6 +863,41 @@ void RunPagingBringup(
 				uart.write_dec_u64(heap_or.value().size_bytes);
 				uart.puts(" pages=");
 				uart.write_dec_u64(kHeapPageCount);
+				uart.putc('\n');
+			}
+		}
+	}
+
+	// Reserve (but do not map) a small lazy-mapped kernel VA range.
+	//
+	// Purpose:
+	// - Provide a controlled target for validating paging-fault recovery.
+	//
+	// Bring-up policy:
+	// - Leave the range unmapped and let the kernel pager map pages on demand.
+	{
+		static constexpr std::size_t kLazyMappedPageCount = 4;
+		static constexpr std::size_t kLazyMappedSizeBytes =
+			kLazyMappedPageCount * Rocinante::Memory::Paging::kPageSizeBytes;
+
+		if (!kernel_va.IsInitialized()) {
+			uart.puts("Paging bring-up: kernel VA allocator not initialized; skipping lazy-map reservation\n");
+		} else {
+			const auto lazy_virtual_base_or = kernel_va.Allocate(
+				kLazyMappedSizeBytes,
+				Rocinante::Memory::Paging::kPageSizeBytes
+			);
+			if (!lazy_virtual_base_or.has_value()) {
+				uart.puts("Paging bring-up: failed to reserve lazy-mapped VA range\n");
+			} else {
+				g_paging_bringup_lazy_virtual_base = lazy_virtual_base_or.value();
+				g_paging_bringup_lazy_size_bytes = kLazyMappedSizeBytes;
+				uart.puts("Paging bring-up: lazy-mapped VA range reserved (unmapped); virt_base=");
+				uart.write_dec_u64(g_paging_bringup_lazy_virtual_base);
+				uart.puts(" size_bytes=");
+				uart.write_dec_u64(g_paging_bringup_lazy_size_bytes);
+				uart.puts(" pages=");
+				uart.write_dec_u64(kLazyMappedPageCount);
 				uart.putc('\n');
 			}
 		}

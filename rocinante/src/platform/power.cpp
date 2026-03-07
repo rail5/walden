@@ -8,7 +8,17 @@
 #include <src/platform/qemu_virt.h>
 #include <src/sp/mmio.h>
 
+namespace {
+
+static std::uintptr_t g_syscon_base_address = Rocinante::Platform::QemuVirt::kSysconBase;
+
+} // namespace
+
 namespace Rocinante::Platform {
+
+void SetSysconBaseAddress(std::uintptr_t base_address) {
+	if (base_address != 0) g_syscon_base_address = base_address;
+}
 
 [[noreturn]] void Halt() {
 	for (;;) {
@@ -18,7 +28,7 @@ namespace Rocinante::Platform {
 
 [[noreturn]] void Shutdown() {
 	Rocinante::MMIO<8>::write(
-		Rocinante::Platform::QemuVirt::kSysconBase + Rocinante::Platform::QemuVirt::kPoweroffOffset,
+		g_syscon_base_address + Rocinante::Platform::QemuVirt::kPoweroffOffset,
 		Rocinante::Platform::QemuVirt::kPoweroffValue
 	);
 	asm volatile("dbar 0" ::: "memory");

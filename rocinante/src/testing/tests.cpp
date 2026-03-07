@@ -38,6 +38,7 @@ void TestEntry_PagingHw_ReadOnlyStore_RaisesPme(TestContext* ctx);
 void TestEntry_PagingHw_NonExecutableFetch_RaisesPnx(TestContext* ctx);
 void TestEntry_PagingHw_PostPaging_MapUnmap_Faults(TestContext* ctx);
 void TestEntry_PagingHw_HigherHalfStack_GuardPageFaults(TestContext* ctx);
+void TestEntry_PagingHw_AddressSpaces_SwitchPgdlChangesTranslation(TestContext* ctx);
 
 extern const TestCase g_test_cases[] = {
 	{"CPUCFG.FakeBackend.DecodesWord1", &TestEntry_CPUCFG_FakeBackend_DecodesWord1},
@@ -66,6 +67,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.PagingHw.NonExecutableFetch.RaisesPNX", &TestEntry_PagingHw_NonExecutableFetch_RaisesPnx},
 	{"Memory.PagingHw.PostPaging.MapUnmap.Faults", &TestEntry_PagingHw_PostPaging_MapUnmap_Faults},
 	{"Memory.PagingHw.HigherHalfStack.GuardPageFaults", &TestEntry_PagingHw_HigherHalfStack_GuardPageFaults},
+	{"Memory.PagingHw.AddressSpaces.SwitchPgdlChangesTranslation", &TestEntry_PagingHw_AddressSpaces_SwitchPgdlChangesTranslation},
 };
 
 extern const std::size_t g_test_case_count = sizeof(g_test_cases) / sizeof(g_test_cases[0]);

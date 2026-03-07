@@ -42,6 +42,10 @@ class Uart16550 final {
 		Uart16550(const Uart16550&) = delete;
 		Uart16550& operator=(const Uart16550&) = delete;
 
+		void set_base_address(std::uintptr_t base_address) {
+			m_base_address = base_address;
+		}
+
 		void putc(char c) const;
 		void puts(const char* str) const;
 

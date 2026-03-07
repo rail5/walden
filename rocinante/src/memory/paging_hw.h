@@ -51,6 +51,50 @@ Rocinante::Optional<PageWalkerConfig> Make4KiBPageWalkerConfig(Paging::AddressSp
 void ConfigurePageTableWalker(const Paging::PageTableRoot& root, PageWalkerConfig config);
 
 /**
+ * @brief Programs the hardware page-table walker CSRs for separate low-half and high-half roots.
+ *
+ * This writes:
+ * - CSR.PWCL, CSR.PWCH
+ * - CSR.PGDL (low-half root)
+ * - CSR.PGDH (high-half root)
+ */
+void ConfigurePageTableWalkerRoots(
+	const Paging::PageTableRoot& low_half_root,
+	const Paging::PageTableRoot& high_half_root,
+	PageWalkerConfig config);
+
+/**
+ * @brief Sets CSR.ASID.ASID to the supplied address-space identifier.
+ *
+ * Spec anchor (LoongArch-Vol1-EN.html):
+ * - Vol.1 Section 7.5.4 (ASID), Table 38:
+ *   - CSR.ASID.ASID is bits [9:0]
+ *   - CSR.ASID.ASIDBITS is bits [23:16]
+ */
+void SetAddressSpaceId(std::uint16_t address_space_id);
+
+/**
+ * @brief Sets CSR.PGDL.Base (low-half root page directory base).
+ *
+ * Spec anchor (LoongArch-Vol1-EN.html):
+ * - Vol.1 Section 7.5.5 (PGDL): Base is 4 KiB aligned.
+ */
+void SetLowHalfRootPageDirectoryBase(const Paging::PageTableRoot& low_half_root);
+
+/**
+ * @brief Activates a low-half address space.
+ *
+ * Policy (bring-up):
+ * - Programs CSR.ASID.ASID and CSR.PGDL.Base.
+ * - Invalidates all TLB entries (coarse) to avoid stale translations.
+ *
+ * Explicit flaw:
+ * - This uses INVTLB op=0 (flush all). Per-ASID and per-page invalidation
+ *   should be added once the ASID model and SMP story are defined.
+ */
+void ActivateLowHalfAddressSpace(const Paging::PageTableRoot& low_half_root, std::uint16_t address_space_id);
+
+/**
  * @brief Invalidates all TLB entries.
  *
  * Spec:

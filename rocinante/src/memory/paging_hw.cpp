@@ -10,10 +10,18 @@ namespace {
 // CSR numbering matches the LoongArch privileged architecture spec.
 namespace Csr {
 	constexpr std::uint32_t kCurrentModeInformation = 0x0; // CSR.CRMD
+	constexpr std::uint32_t kAddressSpaceId = 0x18;        // CSR.ASID
 	constexpr std::uint32_t kPgdLow = 0x19;               // CSR.PGDL
 	constexpr std::uint32_t kPgdHigh = 0x1a;              // CSR.PGDH
 	constexpr std::uint32_t kPageWalkControlLow = 0x1c;   // CSR.PWCL
 	constexpr std::uint32_t kPageWalkControlHigh = 0x1d;  // CSR.PWCH
+}
+
+namespace AddressSpaceId {
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Vol.1 Section 7.5.4 (ASID), Table 38:
+	//   - CSR.ASID.ASID is bits [9:0]
+	static constexpr std::uint64_t kAsidMask = 0x3ff;
 }
 
 namespace CurrentModeInformation {
@@ -134,17 +142,39 @@ Rocinante::Optional<PageWalkerConfig> Make4KiBPageWalkerConfig(Paging::AddressSp
 }
 
 void ConfigurePageTableWalker(const Paging::PageTableRoot& root, PageWalkerConfig config) {
+	ConfigurePageTableWalkerRoots(root, root, config);
+}
+
+void ConfigurePageTableWalkerRoots(
+	const Paging::PageTableRoot& low_half_root,
+	const Paging::PageTableRoot& high_half_root,
+	PageWalkerConfig config
+) {
 	WriteCsr(Csr::kPageWalkControlLow, config.pwcl);
 	WriteCsr(Csr::kPageWalkControlHigh, config.pwch);
 
-	// Early bring-up: use the same root for both halves.
-	//
-	// Flaw / bring-up gap:
-	// We do not yet build a full higher-half/physmap layout with distinct roots
-	// (or separate roots for different address ranges). That can be added once
-	// paging is enabled by default and the virtual layout is finalized.
-	WriteCsr(Csr::kPgdHigh, static_cast<std::uint64_t>(root.root_physical_address));
-	WriteCsr(Csr::kPgdLow, static_cast<std::uint64_t>(root.root_physical_address));
+	WriteCsr(Csr::kPgdHigh, static_cast<std::uint64_t>(high_half_root.root_physical_address));
+	WriteCsr(Csr::kPgdLow, static_cast<std::uint64_t>(low_half_root.root_physical_address));
+}
+
+void SetAddressSpaceId(std::uint16_t address_space_id) {
+	// Preserve all non-ASID fields (e.g. ASIDBITS) and only update CSR.ASID.ASID.
+	const std::uint64_t asid_csr = ReadCsr(Csr::kAddressSpaceId);
+	const std::uint64_t updated = (asid_csr & ~AddressSpaceId::kAsidMask) |
+		(static_cast<std::uint64_t>(address_space_id) & AddressSpaceId::kAsidMask);
+	WriteCsr(Csr::kAddressSpaceId, updated);
+}
+
+void SetLowHalfRootPageDirectoryBase(const Paging::PageTableRoot& low_half_root) {
+	WriteCsr(Csr::kPgdLow, static_cast<std::uint64_t>(low_half_root.root_physical_address));
+}
+
+void ActivateLowHalfAddressSpace(const Paging::PageTableRoot& low_half_root, std::uint16_t address_space_id) {
+	SetAddressSpaceId(address_space_id);
+	SetLowHalfRootPageDirectoryBase(low_half_root);
+
+	// Coarse policy for early bring-up: avoid stale translations by flushing all.
+	InvalidateAllTlbEntries();
 }
 
 void EnablePaging() {
