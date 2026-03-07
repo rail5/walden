@@ -670,6 +670,75 @@ Rocinante::Optional<std::uintptr_t> PhysicalMemoryManager::PhysicalFromPageFrame
 	return Rocinante::Optional<std::uintptr_t>(_page_index_to_physical(page_frame_number));
 }
 
+bool PhysicalMemoryManager::RetainPhysicalPage(std::uintptr_t physical_page_base) {
+	if (!m_initialized) return false;
+	if ((physical_page_base % kPageSizeBytes) != 0) return false;
+	if (physical_page_base < m_tracked_physical_base) return false;
+	if (physical_page_base >= m_tracked_physical_limit) return false;
+
+	const std::size_t pfn = _physical_to_page_index(physical_page_base);
+	if (pfn >= m_page_count) return false;
+
+	auto* metadata = _frame_metadata_ptr();
+	if (!metadata) return false;
+
+	const std::uint32_t before = metadata[pfn].ref_count;
+	if (before == 0) return false;
+	if (before == static_cast<std::uint32_t>(-1)) return false;
+	metadata[pfn].ref_count = before + 1;
+	return true;
+}
+
+bool PhysicalMemoryManager::ReleasePhysicalPage(std::uintptr_t physical_page_base) {
+	if (!m_initialized) return false;
+	if ((physical_page_base % kPageSizeBytes) != 0) return false;
+	if (physical_page_base < m_tracked_physical_base) return false;
+	if (physical_page_base >= m_tracked_physical_limit) return false;
+
+	const std::size_t pfn = _physical_to_page_index(physical_page_base);
+	if (pfn >= m_page_count) return false;
+
+	auto* metadata = _frame_metadata_ptr();
+	if (!metadata) return false;
+
+	const std::uint32_t before = metadata[pfn].ref_count;
+	if (before == 0) return false;
+
+	if (before == 1) {
+		// Safety policy: do not return a page to the allocator while it is still
+		// mapped via tracked leaf PTEs.
+		if (metadata[pfn].map_count != 0) return false;
+		if (!_is_page_used(pfn)) return false;
+
+		metadata[pfn].ref_count = 0;
+		metadata[pfn].flags = 0;
+		metadata[pfn].reserved = 0;
+
+		_set_page_free(pfn);
+		m_free_page_count++;
+		if (pfn < m_next_search_index) m_next_search_index = pfn;
+		return true;
+	}
+
+	metadata[pfn].ref_count = before - 1;
+	return true;
+}
+
+Rocinante::Optional<std::uint32_t> PhysicalMemoryManager::ReferenceCountForPhysical(std::uintptr_t physical_page_base) const {
+	if (!m_initialized) return Rocinante::nullopt;
+	if ((physical_page_base % kPageSizeBytes) != 0) return Rocinante::nullopt;
+	if (physical_page_base < m_tracked_physical_base) return Rocinante::nullopt;
+	if (physical_page_base >= m_tracked_physical_limit) return Rocinante::nullopt;
+
+	const std::size_t pfn = _physical_to_page_index(physical_page_base);
+	if (pfn >= m_page_count) return Rocinante::nullopt;
+
+	const auto* metadata = _frame_metadata_ptr();
+	if (!metadata) return Rocinante::nullopt;
+
+	return Rocinante::Optional<std::uint32_t>(metadata[pfn].ref_count);
+}
+
 bool PhysicalMemoryManager::IncrementMapCountForPhysical(std::uintptr_t physical_page_base) {
 	if (!m_initialized) return false;
 	if ((physical_page_base % kPageSizeBytes) != 0) return false;
@@ -727,6 +796,9 @@ Rocinante::Optional<std::uintptr_t> PhysicalMemoryManager::AllocatePage() {
 	if (!m_initialized) return Rocinante::nullopt;
 	if (m_free_page_count == 0) return Rocinante::nullopt;
 
+	auto* metadata = _frame_metadata_ptr();
+	if (!metadata) return Rocinante::nullopt;
+
 	for (std::size_t scan = 0; scan < m_page_count; scan++) {
 		const std::size_t index = (m_next_search_index + scan) % m_page_count;
 		if (_is_page_used(index)) continue;
@@ -734,6 +806,11 @@ Rocinante::Optional<std::uintptr_t> PhysicalMemoryManager::AllocatePage() {
 		_set_page_used(index);
 		m_free_page_count--;
 		m_next_search_index = (index + 1) % m_page_count;
+
+		metadata[index].ref_count = 1;
+		metadata[index].map_count = 0;
+		metadata[index].flags = 0;
+		metadata[index].reserved = 0;
 		return Rocinante::Optional<std::uintptr_t>(_page_index_to_physical(index));
 	}
 
@@ -741,23 +818,7 @@ Rocinante::Optional<std::uintptr_t> PhysicalMemoryManager::AllocatePage() {
 }
 
 bool PhysicalMemoryManager::FreePage(std::uintptr_t physical_address) {
-	if (!m_initialized) return false;
-	if ((physical_address % kPageSizeBytes) != 0) return false;
-	if (physical_address < m_tracked_physical_base) return false;
-	if (physical_address >= m_tracked_physical_limit) return false;
-
-	const std::size_t index = _physical_to_page_index(physical_address);
-	if (index >= m_page_count) return false;
-
-	if (!_is_page_used(index)) {
-		// Double-free or memory corruption.
-		return false;
-	}
-
-	_set_page_free(index);
-	m_free_page_count++;
-	if (index < m_next_search_index) m_next_search_index = index;
-	return true;
+	return ReleasePhysicalPage(physical_address);
 }
 
 bool PhysicalMemoryManager::ReserveRange(std::uintptr_t physical_base, std::size_t size_bytes) {

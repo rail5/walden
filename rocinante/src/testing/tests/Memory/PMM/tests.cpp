@@ -364,6 +364,61 @@ static void Test_PMM_PageFrameNumberConversions(TestContext* ctx) {
 	ROCINANTE_EXPECT_TRUE(ctx, !pmm.PhysicalFromPageFrameNumber(tracked_pages).has_value());
 }
 
+static void Test_PMM_ReferenceCount_RetainRelease(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+
+	static constexpr std::uintptr_t kUsableBase = 0x00100000;
+	static constexpr std::size_t kUsablePages = 64;
+	static constexpr std::size_t kUsableSizeBytes = kUsablePages * PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uintptr_t kKernelBase = 0x00400000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00401000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00500000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	const std::size_t free_before = pmm.FreePages();
+	const auto physical_or = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, physical_or.has_value());
+	if (!physical_or.has_value()) return;
+	const std::uintptr_t physical_page_base = physical_or.value();
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before - 1);
+
+	const auto ref0 = pmm.ReferenceCountForPhysical(physical_page_base);
+	ROCINANTE_EXPECT_TRUE(ctx, ref0.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ref0.value(), 1);
+
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.RetainPhysicalPage(physical_page_base));
+	const auto ref1 = pmm.ReferenceCountForPhysical(physical_page_base);
+	ROCINANTE_EXPECT_TRUE(ctx, ref1.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ref1.value(), 2);
+
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.ReleasePhysicalPage(physical_page_base));
+	const auto ref2 = pmm.ReferenceCountForPhysical(physical_page_base);
+	ROCINANTE_EXPECT_TRUE(ctx, ref2.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ref2.value(), 1);
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before - 1);
+
+	// Policy: the final release must fail if the page is still mapped.
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.IncrementMapCountForPhysical(physical_page_base));
+	ROCINANTE_EXPECT_TRUE(ctx, !pmm.ReleasePhysicalPage(physical_page_base));
+	const auto ref3 = pmm.ReferenceCountForPhysical(physical_page_base);
+	ROCINANTE_EXPECT_TRUE(ctx, ref3.has_value());
+	ROCINANTE_EXPECT_EQ_U64(ctx, ref3.value(), 1);
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.DecrementMapCountForPhysical(physical_page_base));
+
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePage(physical_page_base));
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before);
+}
+
 } // namespace
 
 void TestEntry_PMM_RespectsReservedKernelAndDTB(TestContext* ctx) {
@@ -388,6 +443,10 @@ void TestEntry_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(TestConte
 
 void TestEntry_PMM_PageFrameNumberConversions(TestContext* ctx) {
 	Test_PMM_PageFrameNumberConversions(ctx);
+}
+
+void TestEntry_PMM_ReferenceCount_RetainRelease(TestContext* ctx) {
+	Test_PMM_ReferenceCount_RetainRelease(ctx);
 }
 
 } // namespace Rocinante::Testing

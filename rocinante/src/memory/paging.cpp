@@ -16,10 +16,20 @@ namespace Rocinante::Memory::Paging {
 
 namespace {
 
+static bool IsPhysMapLeafMapping(
+	std::uintptr_t virtual_page_base,
+	std::uintptr_t physical_page_base,
+	AddressSpaceBits address_bits
+) {
+	const std::uintptr_t physmap_base = Rocinante::Memory::VirtualLayout::PhysMapBase(address_bits.virtual_address_bits);
+	if (virtual_page_base < physmap_base) return false;
+	return (virtual_page_base - physmap_base) == physical_page_base;
+}
+
 // LoongArch privileged architecture: CSR.CRMD (Current Mode Information).
 //
 // Spec anchor:
-// - LoongArch-Vol1-EN.html, Section 5.2 (Virtual Address Space and Address Translation Mode)
+//   - LoongArch-Vol1-EN.html, Section 5.2 (Virtual Address Space and Address Translation Mode)
 //   - CRMD.DA=1, CRMD.PG=0 => direct address translation mode
 //   - CRMD.DA=0, CRMD.PG=1 => mapped address translation mode
 namespace Csr {
@@ -343,10 +353,18 @@ static bool FreeAllPageTablesRecursive(
 			if (!FreeAllPageTablesRecursive(pmm, child_physical, layout, level - 1)) return false;
 			table->entries[i] = 0;
 		}
-	}
+	} else {
+		// Leaf PTEs map physical frames. We intentionally do not free those frames
+		// here; we only decrement their map_count and free the page-table page.
+		for (std::size_t i = 0; i < kEntriesPerTable; i++) {
+			const std::uint64_t entry = table->entries[i];
+			if (!EntryIsPresent(entry)) continue;
 
-	// Leaf PTEs map physical frames. We intentionally do not free those frames
-	// here; we only free the page-table page itself.
+			const std::uintptr_t mapped_physical = EntryPhysicalPageBase(entry, layout.physical_page_base_mask);
+			if (!pmm->DecrementMapCountForPhysical(mapped_physical)) return false;
+			table->entries[i] = 0;
+		}
+	}
 	return pmm->FreePage(table_physical_base);
 }
 
@@ -489,9 +507,11 @@ bool MapPage4KiB(
 	if (EntryIsPresent(table->entries[leaf_index])) return false;
 
 	table->entries[leaf_index] = EncodeLeafEntry(physical_address, layout.physical_page_base_mask, permissions);
-	if (!pmm->IncrementMapCountForPhysical(physical_address)) {
-		table->entries[leaf_index] = 0;
-		return false;
+	if (!IsPhysMapLeafMapping(virtual_address, physical_address, address_bits)) {
+		if (!pmm->IncrementMapCountForPhysical(physical_address)) {
+			table->entries[leaf_index] = 0;
+			return false;
+		}
 	}
 	return true;
 }
@@ -546,7 +566,9 @@ bool UnmapPage4KiB(PhysicalMemoryManager* pmm, const PageTableRoot& root, std::u
 	const std::uint64_t leaf_entry = table->entries[leaf_index];
 	if (!EntryIsPresent(leaf_entry)) return false;
 	const std::uintptr_t mapped_physical = EntryPhysicalPageBase(leaf_entry, layout.physical_page_base_mask);
-	if (!pmm->DecrementMapCountForPhysical(mapped_physical)) return false;
+	if (!IsPhysMapLeafMapping(virtual_address, mapped_physical, address_bits)) {
+		if (!pmm->DecrementMapCountForPhysical(mapped_physical)) return false;
+	}
 	table->entries[leaf_index] = 0;
 
 	// Policy: reclaim empty intermediate page-table pages.

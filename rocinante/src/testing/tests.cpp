@@ -34,6 +34,7 @@ void TestEntry_PMM_ClampsTrackedRangeToPALEN(TestContext* ctx);
 void TestEntry_PMM_BitmapPlacement_RespectsPALEN(TestContext* ctx);
 void TestEntry_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB(TestContext* ctx);
 void TestEntry_PMM_PageFrameNumberConversions(TestContext* ctx);
+void TestEntry_PMM_ReferenceCount_RetainRelease(TestContext* ctx);
 
 void TestEntry_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx);
 void TestEntry_PagingHw_UnmappedAccess_FaultsAndReportsBadV(TestContext* ctx);
@@ -69,6 +70,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.PMM.BitmapPlacement.RespectsPALEN", &TestEntry_PMM_BitmapPlacement_RespectsPALEN},
 	{"Memory.PMM.Initialize.SingleUsableRegionContainingKernelAndDTB", &TestEntry_PMM_Initialize_SingleUsableRegionContainingKernelAndDTB},
 	{"Memory.PMM.PageFrameNumber.Conversions", &TestEntry_PMM_PageFrameNumberConversions},
+	{"Memory.PMM.ReferenceCount.RetainRelease", &TestEntry_PMM_ReferenceCount_RetainRelease},
 	{"Memory.PagingHw.EnablePaging.TlbRefillSmoke", &TestEntry_PagingHw_EnablePaging_TlbRefillSmoke},
 	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &TestEntry_PagingHw_UnmappedAccess_FaultsAndReportsBadV},
 	{"Memory.PagingHw.PagingFaultObserver.DispatchesAndCanHandle", &TestEntry_PagingHw_PagingFaultObserver_DispatchesAndCanHandle},

@@ -73,7 +73,7 @@ class PhysicalMemoryManager final {
 		// Allocates one physical page and returns its physical address.
 		Rocinante::Optional<std::uintptr_t> AllocatePage();
 
-		// Frees a page previously returned by AllocatePage().
+		// Releases a page previously returned by AllocatePage().
 		bool FreePage(std::uintptr_t physical_address);
 
 		// Explicitly reserves a physical range (marks its pages non-allocatable).
@@ -103,6 +103,37 @@ class PhysicalMemoryManager final {
 		 * - the PFN is outside the tracked span.
 		 */
 		Rocinante::Optional<std::uintptr_t> PhysicalFromPageFrameNumber(std::size_t page_frame_number) const;
+
+		/**
+		 * @brief Retains a tracked physical page by incrementing its ref_count.
+		 *
+		 * Returns false if:
+		 * - the PMM is not initialized,
+		 * - the address is not page-aligned,
+		 * - the address is outside the PMM tracked physical span, or
+		 * - the page currently has ref_count==0 (not retainable by policy).
+		 */
+		bool RetainPhysicalPage(std::uintptr_t physical_page_base);
+
+		/**
+		 * @brief Releases a tracked physical page by decrementing its ref_count.
+		 *
+		 * When the reference count reaches zero, the page is returned to the PMM
+		 * free pool.
+		 *
+		 * Returns false if:
+		 * - the PMM is not initialized,
+		 * - the address is not page-aligned,
+		 * - the address is outside the PMM tracked physical span,
+		 * - the page's ref_count is already zero, or
+		 * - the page still has a non-zero map_count.
+		 */
+		bool ReleasePhysicalPage(std::uintptr_t physical_page_base);
+
+		/**
+		 * @brief Returns the current ref_count for a physical page, if tracked.
+		 */
+		Rocinante::Optional<std::uint32_t> ReferenceCountForPhysical(std::uintptr_t physical_page_base) const;
 
 		/**
 		 * @brief Increments the leaf-mapping count (map_count) for a physical page.
