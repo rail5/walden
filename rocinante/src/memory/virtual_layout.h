@@ -5,8 +5,8 @@
 
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace Rocinante::Memory {
 
@@ -51,6 +51,30 @@ namespace VirtualLayout {
 
 	static constexpr std::uintptr_t PhysMapBase(std::uint8_t virtual_address_bits) {
 		return CanonicalHighHalfBase(virtual_address_bits) + kPhysMapOffsetBytes;
+	}
+
+	/**
+	 * @brief Returns the exclusive upper bound of physical addresses representable by the physmap.
+	 *
+	 * Physmap policy:
+	 * - The physmap is a linear mapping where `ToPhysMapVirtual(pa) = PhysMapBase(VALEN) + pa`.
+	 * - Therefore, the physmap can only represent physical addresses where the computed virtual
+	 *   address stays within the canonical higher-half range.
+	 *
+	 * This helper makes the constraint explicit so paging bring-up can validate that the
+	 * PMM-tracked physical span fits.
+	 *
+	 * Spec anchor (LoongArch-Vol1-EN.html):
+	 * - Section 7.5.5/7.5.6 (PGDL/PGDH): the paging root is selected by VA[VALEN-1] (lower vs higher half).
+	 *   We intentionally place the physmap in the higher half.
+	 */
+	static constexpr std::uintptr_t PhysMapMaxPhysicalAddressExclusive(std::uint8_t virtual_address_bits) {
+		const std::uintptr_t physmap_base = PhysMapBase(virtual_address_bits);
+		if (physmap_base == 0) return 0;
+
+		const std::uintptr_t max_virtual_address = std::numeric_limits<std::uintptr_t>::max();
+		if (physmap_base > max_virtual_address) return 0;
+		return (max_virtual_address - physmap_base) + 1;
 	}
 
 	static constexpr std::uintptr_t ToPhysMapVirtual(std::uintptr_t physical_address, std::uint8_t virtual_address_bits) {

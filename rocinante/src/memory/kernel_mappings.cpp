@@ -9,12 +9,29 @@
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
 
+#include <limits>
+
 namespace Rocinante::Memory::KernelMappings {
 
 namespace {
 
 static bool IsPageAligned(std::uintptr_t address) {
 	return (address % Rocinante::Memory::Paging::kPageSizeBytes) == 0;
+}
+
+static std::uintptr_t RoundDownToPage(std::uintptr_t address) {
+	return address & static_cast<std::uintptr_t>(Rocinante::Memory::Paging::kPageBaseMask);
+}
+
+static Rocinante::Optional<std::size_t> RoundUpToPageSize(std::size_t bytes) {
+	if (bytes == 0) return 0;
+	const std::size_t page_size = Rocinante::Memory::Paging::kPageSizeBytes;
+	const std::size_t add = page_size - 1;
+	const std::size_t max_size = std::numeric_limits<std::size_t>::max();
+	if (bytes > (max_size - add)) return Rocinante::nullopt;
+	const std::size_t rounded = (bytes + add) & ~add;
+	if ((rounded % page_size) != 0) return Rocinante::nullopt;
+	return rounded;
 }
 
 } // namespace
@@ -225,6 +242,75 @@ bool UnmapAndFree4KiB(
 
 	if (!all_unmapped) return false;
 	return va_allocator->Free(virtual_base, size_bytes);
+}
+
+Rocinante::Optional<MmioMappedRange4KiB> IoremapMmio4KiB(
+	PhysicalMemoryManager* pmm,
+	const Paging::PageTableRoot& root,
+	KernelVirtualAddressAllocator* va_allocator,
+	std::uintptr_t physical_base,
+	std::size_t size_bytes,
+	Paging::AddressSpaceBits address_bits
+) {
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::PagePermissions;
+
+	if (!pmm || !va_allocator) return Rocinante::nullopt;
+	if (size_bytes == 0) return Rocinante::nullopt;
+
+	const std::uintptr_t mapped_physical_base = RoundDownToPage(physical_base);
+	const std::uintptr_t page_offset = physical_base - mapped_physical_base;
+	if (page_offset >= Rocinante::Memory::Paging::kPageSizeBytes) return Rocinante::nullopt;
+	if (size_bytes > (static_cast<std::size_t>(~0ull) - static_cast<std::size_t>(page_offset))) {
+		return Rocinante::nullopt;
+	}
+	const std::size_t covered_bytes = size_bytes + static_cast<std::size_t>(page_offset);
+	const auto mapped_size_or = RoundUpToPageSize(covered_bytes);
+	if (!mapped_size_or.has_value()) return Rocinante::nullopt;
+	const std::size_t mapped_size_bytes = mapped_size_or.value();
+	if (mapped_size_bytes == 0) return Rocinante::nullopt;
+
+	const PagePermissions permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::StrongUncached,
+		.global = true,
+	};
+
+	const auto mapped_or = MapPhysicalRange4KiB(
+		pmm,
+		root,
+		va_allocator,
+		mapped_physical_base,
+		mapped_size_bytes,
+		permissions,
+		address_bits);
+	if (!mapped_or.has_value()) return Rocinante::nullopt;
+
+	const std::uintptr_t mapped_virtual_base = mapped_or.value().virtual_base;
+	const std::uintptr_t virtual_base = mapped_virtual_base + page_offset;
+	return MmioMappedRange4KiB{
+		.virtual_base = virtual_base,
+		.size_bytes = size_bytes,
+		.mapped_virtual_base = mapped_virtual_base,
+		.mapped_size_bytes = mapped_size_bytes,
+	};
+}
+
+bool IounmapMmio4KiB(
+	const Paging::PageTableRoot& root,
+	KernelVirtualAddressAllocator* va_allocator,
+	const MmioMappedRange4KiB& mapping,
+	Paging::AddressSpaceBits address_bits
+) {
+	return UnmapAndFree4KiB(
+		root,
+		va_allocator,
+		mapping.mapped_virtual_base,
+		mapping.mapped_size_bytes,
+		address_bits);
 }
 
 } // namespace Rocinante::Memory::KernelMappings

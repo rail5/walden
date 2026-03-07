@@ -513,11 +513,16 @@ void RunPagingBringup(
 		}
 		return index;
 	};
-	constexpr std::uint8_t kLowestHighFlagBit =
-		(BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoRead) <
-			BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoExecute))
-			? BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoRead)
-			: BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoExecute);
+	constexpr std::uint8_t kNoReadBitIndex =
+		BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoRead);
+	constexpr std::uint8_t kNoExecuteBitIndex =
+		BitIndexFromSingleBitMask(Rocinante::Memory::Paging::PteBits::kNoExecute);
+	constexpr std::uint8_t kLowestHighFlagBit = []() constexpr -> std::uint8_t {
+		if constexpr (kNoReadBitIndex < kNoExecuteBitIndex) {
+			return kNoReadBitIndex;
+		}
+		return kNoExecuteBitIndex;
+	}();
 	constexpr std::uint32_t kMaxEncodablePALEN = kLowestHighFlagBit;
 	if (physical_address_bits < Rocinante::Memory::Paging::kPageShiftBits || physical_address_bits > kMaxEncodablePALEN) {
 		uart.puts("Paging bring-up: unsupported PALEN for current PTE encoding; skipping.\n");
@@ -545,6 +550,26 @@ void RunPagingBringup(
 	const std::uintptr_t tracked_physical_limit = pmm.TrackedPhysicalLimit();
 	std::size_t physmap_size_bytes = 0;
 	if (tracked_physical_limit > physmap_physical_base) {
+		const std::uintptr_t physmap_max_physical_limit =
+			Rocinante::Memory::VirtualLayout::PhysMapMaxPhysicalAddressExclusive(address_bits.virtual_address_bits);
+		if (physmap_max_physical_limit == 0) {
+			uart.puts("Paging bring-up: physmap addressability contract unavailable; refusing to enable paging\n");
+			return;
+		}
+		if (tracked_physical_limit > physmap_max_physical_limit) {
+			uart.puts("Paging bring-up: PMM tracked RAM exceeds physmap representable range\n");
+			uart.puts("Paging bring-up:   tracked_phys=[");
+			uart.write_dec_u64(physmap_physical_base);
+			uart.puts(", ");
+			uart.write_dec_u64(tracked_physical_limit);
+			uart.puts(")\n");
+			uart.puts("Paging bring-up:   physmap_max_physical_limit=");
+			uart.write_dec_u64(physmap_max_physical_limit);
+			uart.putc('\n');
+			uart.puts("Paging bring-up: refusing to enable paging without a complete physmap\n");
+			return;
+		}
+
 		const std::size_t tracked_size_bytes =
 			static_cast<std::size_t>(tracked_physical_limit - physmap_physical_base);
 		// Bring-up policy:
@@ -702,55 +727,51 @@ void RunPagingBringup(
 	if (!kernel_va.IsInitialized()) {
 		uart.puts("Paging bring-up: WARNING: kernel VA allocator not initialized; skipping higher-half MMIO aliases\n");
 	} else {
-		const std::size_t kPageSize = Rocinante::Memory::Paging::kPageSizeBytes;
-		const auto uart_alias_page_or = kernel_va.Allocate(kPageSize, kPageSize);
-		const auto syscon_alias_page_or = kernel_va.Allocate(kPageSize, kPageSize);
-		if (!uart_alias_page_or.has_value() || !syscon_alias_page_or.has_value()) {
-			uart.puts("Paging bring-up: WARNING: failed to allocate higher-half VA for MMIO aliases\n");
+		// Use KernelMappings::IoremapMmio4KiB so the helper handles the unaligned
+		// device base addresses and enforces the StrongUncached+NX policy.
+		//
+		// Sizing is based on the maximum offset we actually touch:
+		// - UART: see Uart16550::kMmioRequiredBytes (highest used offset + 1 byte).
+		// - syscon-poweroff: QemuVirt::kPoweroffOffset is a single byte write.
+		static constexpr std::size_t kSysconMmioRequiredBytes =
+			static_cast<std::size_t>(Rocinante::Platform::QemuVirt::kPoweroffOffset) + 1u;
+
+		const auto uart_mmio_or = Rocinante::Memory::KernelMappings::IoremapMmio4KiB(
+			&pmm,
+			root,
+			&kernel_va,
+			UART_BASE,
+			Rocinante::Uart16550::kMmioRequiredBytes,
+			address_bits
+		);
+		if (!uart_mmio_or.has_value()) {
+			uart.puts("Paging bring-up: WARNING: failed to map higher-half UART MMIO alias\n");
 		} else {
-			const std::uintptr_t uart_alias_page = uart_alias_page_or.value();
-			const std::uintptr_t syscon_alias_page = syscon_alias_page_or.value();
+			g_paging_bringup_uart_mmio_virtual_base = uart_mmio_or.value().virtual_base;
+		}
 
-			const std::uintptr_t uart_offset = UART_BASE - uart_page_base;
-			const std::uintptr_t syscon_offset = kSysconBase - syscon_page_base;
+		const auto syscon_mmio_or = Rocinante::Memory::KernelMappings::IoremapMmio4KiB(
+			&pmm,
+			root,
+			&kernel_va,
+			kSysconBase,
+			kSysconMmioRequiredBytes,
+			address_bits
+		);
+		if (!syscon_mmio_or.has_value()) {
+			uart.puts("Paging bring-up: WARNING: failed to map higher-half syscon MMIO alias\n");
+		} else {
+			g_paging_bringup_syscon_mmio_virtual_base = syscon_mmio_or.value().virtual_base;
+		}
 
-			if (!Rocinante::Memory::Paging::MapRange4KiB(
-				&pmm,
-				root,
-				uart_alias_page,
-				uart_page_base,
-				kPageSize,
-				mmio_permissions,
-				address_bits
-			)) {
-				uart.puts("Paging bring-up: WARNING: failed to map higher-half UART MMIO alias\n");
-			} else {
-				g_paging_bringup_uart_mmio_virtual_base = uart_alias_page + uart_offset;
-			}
-
-			if (!Rocinante::Memory::Paging::MapRange4KiB(
-				&pmm,
-				root,
-				syscon_alias_page,
-				syscon_page_base,
-				kPageSize,
-				mmio_permissions,
-				address_bits
-			)) {
-				uart.puts("Paging bring-up: WARNING: failed to map higher-half syscon MMIO alias\n");
-			} else {
-				g_paging_bringup_syscon_mmio_virtual_base = syscon_alias_page + syscon_offset;
-			}
-
-			if (g_paging_bringup_uart_mmio_virtual_base != 0 && g_paging_bringup_syscon_mmio_virtual_base != 0) {
-				uart.puts("Paging bring-up: higher-half MMIO aliases mapped; uart_mmio=");
-				uart.write_dec_u64(g_paging_bringup_uart_mmio_virtual_base);
-				uart.puts(" syscon_mmio=");
-				uart.write_dec_u64(g_paging_bringup_syscon_mmio_virtual_base);
-				uart.putc('\n');
-			} else {
-				uart.puts("Paging bring-up: WARNING: incomplete higher-half MMIO alias mapping\n");
-			}
+		if (g_paging_bringup_uart_mmio_virtual_base != 0 && g_paging_bringup_syscon_mmio_virtual_base != 0) {
+			uart.puts("Paging bring-up: higher-half MMIO aliases mapped; uart_mmio=");
+			uart.write_dec_u64(g_paging_bringup_uart_mmio_virtual_base);
+			uart.puts(" syscon_mmio=");
+			uart.write_dec_u64(g_paging_bringup_syscon_mmio_virtual_base);
+			uart.putc('\n');
+		} else {
+			uart.puts("Paging bring-up: WARNING: incomplete higher-half MMIO alias mapping\n");
 		}
 	}
 

@@ -34,6 +34,17 @@ struct GuardedMappedRange4KiB final {
 	}
 };
 
+struct MmioMappedRange4KiB final {
+	// Virtual base corresponding to the requested physical base (may be unaligned).
+	std::uintptr_t virtual_base;
+	std::size_t size_bytes;
+
+	// The internal, page-aligned mapping. This is what must be passed to
+	// `UnmapAndFree4KiB()` (or `IounmapMmio4KiB()`) to tear the mapping down.
+	std::uintptr_t mapped_virtual_base;
+	std::size_t mapped_size_bytes;
+};
+
 // Minimal kernel mapping helper (bring-up).
 //
 // This composes:
@@ -129,6 +140,31 @@ bool UnmapAndFree4KiB(
 	KernelVirtualAddressAllocator* va_allocator,
 	std::uintptr_t virtual_base,
 	std::size_t size_bytes,
+	Paging::AddressSpaceBits address_bits
+);
+
+// I/O remap helper for device MMIO windows.
+//
+// Semantics:
+// - Accepts an arbitrary (possibly unaligned) physical base and size.
+// - Rounds the mapping down/up to 4 KiB boundaries.
+// - Returns a VA that points at the requested physical base (including offset).
+// - Uses StrongUncached + NoExecute mappings (kernel policy for MMIO).
+// - Does not allocate or free the physical backing; it only creates/removes
+//   page-table mappings and allocates/frees virtual address space.
+Rocinante::Optional<MmioMappedRange4KiB> IoremapMmio4KiB(
+	PhysicalMemoryManager* pmm,
+	const Paging::PageTableRoot& root,
+	KernelVirtualAddressAllocator* va_allocator,
+	std::uintptr_t physical_base,
+	std::size_t size_bytes,
+	Paging::AddressSpaceBits address_bits
+);
+
+bool IounmapMmio4KiB(
+	const Paging::PageTableRoot& root,
+	KernelVirtualAddressAllocator* va_allocator,
+	const MmioMappedRange4KiB& mapping,
 	Paging::AddressSpaceBits address_bits
 );
 

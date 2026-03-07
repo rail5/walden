@@ -12,6 +12,7 @@
 #include <src/memory/kernel_va_allocator.h>
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
+#include <src/memory/virtual_layout.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -70,13 +71,8 @@ static void Test_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx) {
 	if (!root_or.has_value()) return;
 
 	// Choose a canonical high-half base for the current VALEN.
-	std::uintptr_t low_mask = 0;
-	for (std::uint8_t i = 0; i < address_bits.virtual_address_bits; i++) {
-		low_mask = (low_mask << 1) | 1u;
-	}
-	const std::uintptr_t upper_mask = ~low_mask;
-	const std::uintptr_t sign_bit = (low_mask + 1) >> 1;
-	const std::uintptr_t canonical_high_half_base = upper_mask | sign_bit;
+	const std::uintptr_t canonical_high_half_base =
+		Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(address_bits.virtual_address_bits);
 
 	KernelVirtualAddressAllocator allocator;
 	const std::uintptr_t managed_base = canonical_high_half_base + 0x01000000ull; // +16 MiB
@@ -368,6 +364,137 @@ static void Test_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx) {
 	ROCINANTE_EXPECT_TRUE(ctx, allocator.Free(mapped_or.value().guard_virtual_base, total_size_bytes));
 }
 
+static void Test_KernelMappings_IoremapMmio4KiB(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::KernelVirtualAddressAllocator;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::KernelMappings::IoremapMmio4KiB;
+	using Rocinante::Memory::KernelMappings::IounmapMmio4KiB;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::Translate;
+
+	auto& cpucfg = Rocinante::GetCPUCFG();
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = static_cast<std::uint8_t>(cpucfg.VirtualAddressBits()),
+		.physical_address_bits = static_cast<std::uint8_t>(cpucfg.PhysicalAddressBits()),
+	};
+	ROCINANTE_EXPECT_TRUE(ctx, address_bits.virtual_address_bits > 0);
+	ROCINANTE_EXPECT_TRUE(ctx, address_bits.virtual_address_bits < 64);
+
+	static constexpr std::uintptr_t kUsableBase = 0x01000000; // 16 MiB
+	static constexpr std::size_t kUsableSizeBytes = 8u * 1024u * 1024u; // 8 MiB
+
+	const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+	const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+	ROCINANTE_EXPECT_TRUE(ctx, kernel_physical_end > kernel_physical_base);
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(
+		map,
+		kernel_physical_base,
+		kernel_physical_end,
+		0,
+		0));
+
+	const auto root_or = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root_or.has_value());
+	if (!root_or.has_value()) return;
+
+	// Choose a canonical high-half base for the current VALEN.
+	std::uintptr_t low_mask = 0;
+	for (std::uint8_t i = 0; i < address_bits.virtual_address_bits; i++) {
+		low_mask = (low_mask << 1) | 1u;
+	}
+	const std::uintptr_t upper_mask = ~low_mask;
+	const std::uintptr_t sign_bit = (low_mask + 1) >> 1;
+	const std::uintptr_t canonical_high_half_base = upper_mask | sign_bit;
+
+	KernelVirtualAddressAllocator allocator;
+	static constexpr std::uintptr_t kManagedBaseOffsetBytes = 64u * 1024u * 1024u;
+	const std::uintptr_t managed_base = canonical_high_half_base + kManagedBaseOffsetBytes;
+	const std::uintptr_t managed_limit = managed_base + (16u * PhysicalMemoryManager::kPageSizeBytes);
+	allocator.Init(managed_base, managed_limit);
+	ROCINANTE_EXPECT_TRUE(ctx, allocator.IsInitialized());
+
+	// Case 1: unaligned physical base fully contained in one 4 KiB page.
+	{
+		static constexpr std::uintptr_t kPhysicalOffset = 0x123;
+		static constexpr std::size_t kSizeBytes = 0x80;
+		const std::uintptr_t physical_base = kUsableBase + kPhysicalOffset;
+
+		const auto mapped_or = IoremapMmio4KiB(
+			&pmm,
+			root_or.value(),
+			&allocator,
+			physical_base,
+			kSizeBytes,
+			address_bits);
+		ROCINANTE_EXPECT_TRUE(ctx, mapped_or.has_value());
+		if (!mapped_or.has_value()) return;
+
+		ROCINANTE_EXPECT_EQ_U64(ctx, mapped_or.value().virtual_base % PhysicalMemoryManager::kPageSizeBytes, kPhysicalOffset);
+		ROCINANTE_EXPECT_EQ_U64(ctx, mapped_or.value().size_bytes, kSizeBytes);
+		ROCINANTE_EXPECT_TRUE(ctx, (mapped_or.value().mapped_virtual_base % PhysicalMemoryManager::kPageSizeBytes) == 0);
+		ROCINANTE_EXPECT_EQ_U64(ctx, mapped_or.value().mapped_size_bytes, PhysicalMemoryManager::kPageSizeBytes);
+
+		const auto translated_base = Translate(root_or.value(), mapped_or.value().virtual_base, address_bits);
+		ROCINANTE_EXPECT_TRUE(ctx, translated_base.has_value());
+		if (translated_base.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, translated_base.value(), physical_base);
+		}
+
+		const auto translated_last = Translate(root_or.value(), mapped_or.value().virtual_base + (kSizeBytes - 1), address_bits);
+		ROCINANTE_EXPECT_TRUE(ctx, translated_last.has_value());
+		if (translated_last.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, translated_last.value(), physical_base + (kSizeBytes - 1));
+		}
+
+		ROCINANTE_EXPECT_TRUE(ctx, IounmapMmio4KiB(root_or.value(), &allocator, mapped_or.value(), address_bits));
+		ROCINANTE_EXPECT_TRUE(ctx, !Translate(root_or.value(), mapped_or.value().virtual_base, address_bits).has_value());
+	}
+
+	// Case 2: unaligned physical base that crosses a 4 KiB boundary.
+	{
+		static constexpr std::uintptr_t kPhysicalOffset = 0x0F00;
+		static constexpr std::size_t kSizeBytes = 0x300;
+		const std::uintptr_t physical_base = kUsableBase + kPhysicalOffset;
+
+		const auto mapped_or = IoremapMmio4KiB(
+			&pmm,
+			root_or.value(),
+			&allocator,
+			physical_base,
+			kSizeBytes,
+			address_bits);
+		ROCINANTE_EXPECT_TRUE(ctx, mapped_or.has_value());
+		if (!mapped_or.has_value()) return;
+
+		ROCINANTE_EXPECT_EQ_U64(ctx, mapped_or.value().virtual_base % PhysicalMemoryManager::kPageSizeBytes, kPhysicalOffset);
+		ROCINANTE_EXPECT_EQ_U64(ctx, mapped_or.value().mapped_size_bytes, 2u * PhysicalMemoryManager::kPageSizeBytes);
+
+		const auto translated_base = Translate(root_or.value(), mapped_or.value().virtual_base, address_bits);
+		ROCINANTE_EXPECT_TRUE(ctx, translated_base.has_value());
+		if (translated_base.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, translated_base.value(), physical_base);
+		}
+
+		const auto translated_last = Translate(root_or.value(), mapped_or.value().virtual_base + (kSizeBytes - 1), address_bits);
+		ROCINANTE_EXPECT_TRUE(ctx, translated_last.has_value());
+		if (translated_last.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, translated_last.value(), physical_base + (kSizeBytes - 1));
+		}
+
+		ROCINANTE_EXPECT_TRUE(ctx, IounmapMmio4KiB(root_or.value(), &allocator, mapped_or.value(), address_bits));
+		ROCINANTE_EXPECT_TRUE(ctx, !Translate(root_or.value(), mapped_or.value().virtual_base, address_bits).has_value());
+	}
+}
+
 } // namespace
 
 void TestEntry_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx) {
@@ -380,6 +507,10 @@ void TestEntry_KernelMappings_MapNewRange4KiB(TestContext* ctx) {
 
 void TestEntry_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx) {
 	Test_KernelMappings_MapNewGuardedRange4KiB(ctx);
+}
+
+void TestEntry_KernelMappings_IoremapMmio4KiB(TestContext* ctx) {
+	Test_KernelMappings_IoremapMmio4KiB(ctx);
 }
 
 } // namespace Rocinante::Testing

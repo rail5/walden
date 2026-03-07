@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace Rocinante {
@@ -27,6 +28,14 @@ class Uart16550 final {
 		// Interrupt enable flag
 		static constexpr std::uint8_t INTERRUPT_ENABLE_RECEIVED_DATA_AVAILABLE = 0x01; // If set, an interrupt will be triggered when data is available to read
 
+		// This driver only touches registers up through OFFSET_LINE_STATUS.
+		//
+		// Paging bring-up uses this to size the higher-half MMIO alias mapping
+		// precisely (instead of hard-coding a guessed span).
+		//
+		// Note: the implementation uses MMIO<8> accesses, so each register access
+		// touches exactly one byte at base+offset.
+
 		// Receive ring buffer for incoming data
 		static constexpr std::uint32_t RECEIVE_BUFFER_SIZE = 1024;
 		static constexpr std::uint32_t RECEIVE_BUFFER_MASK = RECEIVE_BUFFER_SIZE - 1;
@@ -38,6 +47,10 @@ class Uart16550 final {
 	
 	public:
 		constexpr explicit Uart16550(std::uintptr_t base_address) : m_base_address(base_address) {}
+
+		// Minimal byte span (starting at the UART base address) that must be mapped
+		// for this driver to function.
+		static constexpr std::size_t kMmioRequiredBytes = static_cast<std::size_t>(OFFSET_LINE_STATUS) + 1u;
 
 		Uart16550(const Uart16550&) = delete;
 		Uart16550& operator=(const Uart16550&) = delete;

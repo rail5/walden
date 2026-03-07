@@ -219,6 +219,10 @@ static void Test_Paging_Physmap_MapsRootPageTableAndAttributes(TestContext* ctx)
 
 	const std::uintptr_t physmap_virtual_base =
 		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(kUsableBase, address_bits.virtual_address_bits);
+	const std::uintptr_t physmap_max_physical_limit =
+		Rocinante::Memory::VirtualLayout::PhysMapMaxPhysicalAddressExclusive(address_bits.virtual_address_bits);
+	ROCINANTE_EXPECT_TRUE(ctx, physmap_max_physical_limit != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, (kUsableBase + kUsableSizeBytes) <= physmap_max_physical_limit);
 
 	const PagePermissions physmap_permissions{
 		.access = AccessPermissions::ReadWrite,

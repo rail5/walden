@@ -23,6 +23,7 @@ void TestEntry_KernelVirtualAddressAllocator_ReserveCarvesFixedRange(TestContext
 void TestEntry_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx);
 void TestEntry_KernelMappings_MapNewRange4KiB(TestContext* ctx);
 void TestEntry_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx);
+void TestEntry_KernelMappings_IoremapMmio4KiB(TestContext* ctx);
 
 void TestEntry_PMM_RespectsReservedKernelAndDTB(TestContext* ctx);
 void TestEntry_PMM_DoesNotClobberReservedDuringBitmapPlacement(TestContext* ctx);
@@ -54,6 +55,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.KernelMappings.MapTranslateUnmapAndFree", &TestEntry_KernelMappings_MapTranslateUnmapAndFree},
 	{"Memory.KernelMappings.MapNewRange4KiB", &TestEntry_KernelMappings_MapNewRange4KiB},
 	{"Memory.KernelMappings.MapNewGuardedRange4KiB", &TestEntry_KernelMappings_MapNewGuardedRange4KiB},
+	{"Memory.KernelMappings.IoremapMmio4KiB", &TestEntry_KernelMappings_IoremapMmio4KiB},
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &TestEntry_PMM_RespectsReservedKernelAndDTB},
 	{"Memory.PMM.BitmapPlacement.DoesNotClobberReserved", &TestEntry_PMM_DoesNotClobberReservedDuringBitmapPlacement},
 	{"Memory.PMM.ClampsTrackedRangeToPALEN", &TestEntry_PMM_ClampsTrackedRangeToPALEN},
