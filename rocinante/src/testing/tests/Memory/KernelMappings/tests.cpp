@@ -372,7 +372,13 @@ static void Test_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx) {
 
 void TestEntry_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx) {
 	Test_KernelMappings_MapTranslateUnmapAndFree(ctx);
+}
+
+void TestEntry_KernelMappings_MapNewRange4KiB(TestContext* ctx) {
 	Test_KernelMappings_MapNewRange4KiB(ctx);
+}
+
+void TestEntry_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx) {
 	Test_KernelMappings_MapNewGuardedRange4KiB(ctx);
 }
 

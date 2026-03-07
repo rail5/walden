@@ -21,6 +21,8 @@ void TestEntry_KernelVirtualAddressAllocator_AllocateFreeCoalesce(TestContext* c
 void TestEntry_KernelVirtualAddressAllocator_ReserveCarvesFixedRange(TestContext* ctx);
 
 void TestEntry_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx);
+void TestEntry_KernelMappings_MapNewRange4KiB(TestContext* ctx);
+void TestEntry_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx);
 
 void TestEntry_PMM_RespectsReservedKernelAndDTB(TestContext* ctx);
 void TestEntry_PMM_DoesNotClobberReservedDuringBitmapPlacement(TestContext* ctx);
@@ -49,6 +51,8 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.KernelVirtualAddressAllocator.AllocateFreeCoalesce", &TestEntry_KernelVirtualAddressAllocator_AllocateFreeCoalesce},
 	{"Memory.KernelVirtualAddressAllocator.ReserveCarvesFixedRange", &TestEntry_KernelVirtualAddressAllocator_ReserveCarvesFixedRange},
 	{"Memory.KernelMappings.MapTranslateUnmapAndFree", &TestEntry_KernelMappings_MapTranslateUnmapAndFree},
+	{"Memory.KernelMappings.MapNewRange4KiB", &TestEntry_KernelMappings_MapNewRange4KiB},
+	{"Memory.KernelMappings.MapNewGuardedRange4KiB", &TestEntry_KernelMappings_MapNewGuardedRange4KiB},
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &TestEntry_PMM_RespectsReservedKernelAndDTB},
 	{"Memory.PMM.BitmapPlacement.DoesNotClobberReserved", &TestEntry_PMM_DoesNotClobberReservedDuringBitmapPlacement},
 	{"Memory.PMM.ClampsTrackedRangeToPALEN", &TestEntry_PMM_ClampsTrackedRangeToPALEN},
