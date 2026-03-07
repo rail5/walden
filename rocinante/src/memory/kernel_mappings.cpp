@@ -245,6 +245,48 @@ bool UnmapAndFree4KiB(
 	return va_allocator->Free(virtual_base, size_bytes);
 }
 
+bool UnmapAndFreeBackingPages4KiB(
+	PhysicalMemoryManager* pmm,
+	const Paging::PageTableRoot& root,
+	KernelVirtualAddressAllocator* va_allocator,
+	std::uintptr_t virtual_base,
+	std::size_t size_bytes,
+	Paging::AddressSpaceBits address_bits
+) {
+	if (!pmm || !va_allocator) return false;
+	if (size_bytes == 0) return false;
+	if (!IsPageAligned(virtual_base)) return false;
+	if ((size_bytes % Rocinante::Memory::Paging::kPageSizeBytes) != 0) return false;
+
+	bool all_unmapped = true;
+	std::size_t unmapped_bytes = 0;
+	while (unmapped_bytes < size_bytes) {
+		const std::uintptr_t virtual_page = virtual_base + unmapped_bytes;
+		const auto physical_or = Paging::Translate(root, virtual_page, address_bits);
+
+		if (!Paging::UnmapPage4KiB(pmm, root, virtual_page, address_bits)) {
+			all_unmapped = false;
+		} else {
+			// Only attempt to free the backing page if the unmap succeeded.
+			//
+			// NOTE: We translate before unmapping so that the physical address is
+			// still observable through the page tables.
+			if (!physical_or.has_value()) {
+				all_unmapped = false;
+			} else {
+				if (!pmm->FreePage(physical_or.value())) {
+					all_unmapped = false;
+				}
+			}
+		}
+
+		unmapped_bytes += Rocinante::Memory::Paging::kPageSizeBytes;
+	}
+
+	if (!all_unmapped) return false;
+	return va_allocator->Free(virtual_base, size_bytes);
+}
+
 Rocinante::Optional<MmioMappedRange4KiB> IoremapMmio4KiB(
 	PhysicalMemoryManager* pmm,
 	const Paging::PageTableRoot& root,

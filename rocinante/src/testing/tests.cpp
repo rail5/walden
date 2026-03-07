@@ -25,6 +25,7 @@ void TestEntry_KernelVirtualAddressAllocator_ReserveCarvesFixedRange(TestContext
 
 void TestEntry_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx);
 void TestEntry_KernelMappings_MapNewRange4KiB(TestContext* ctx);
+void TestEntry_KernelMappings_MapNewRange4KiB_ReclaimsBackingPages(TestContext* ctx);
 void TestEntry_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx);
 void TestEntry_KernelMappings_IoremapMmio4KiB(TestContext* ctx);
 
@@ -62,6 +63,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.KernelVirtualAddressAllocator.ReserveCarvesFixedRange", &TestEntry_KernelVirtualAddressAllocator_ReserveCarvesFixedRange},
 	{"Memory.KernelMappings.MapTranslateUnmapAndFree", &TestEntry_KernelMappings_MapTranslateUnmapAndFree},
 	{"Memory.KernelMappings.MapNewRange4KiB", &TestEntry_KernelMappings_MapNewRange4KiB},
+	{"Memory.KernelMappings.MapNewRange4KiB.ReclaimsBackingPages", &TestEntry_KernelMappings_MapNewRange4KiB_ReclaimsBackingPages},
 	{"Memory.KernelMappings.MapNewGuardedRange4KiB", &TestEntry_KernelMappings_MapNewGuardedRange4KiB},
 	{"Memory.KernelMappings.IoremapMmio4KiB", &TestEntry_KernelMappings_IoremapMmio4KiB},
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &TestEntry_PMM_RespectsReservedKernelAndDTB},

@@ -144,6 +144,29 @@ bool UnmapAndFree4KiB(
 	Paging::AddressSpaceBits address_bits
 );
 
+// Unmaps a virtual range and returns its *backing physical pages* to the PMM.
+//
+// Intended use:
+// - Tearing down mappings created by MapNewRange4KiB() (or similar helpers)
+//   that allocate one PMM page per 4 KiB mapping.
+//
+// Important:
+// - This is NOT safe for ranges mapped with MapPhysicalRange4KiB() or MMIO
+//   mappings: those physical pages are caller-owned and must not be freed.
+// - `Paging::UnmapPage4KiB()` intentionally does not define a TLB invalidation
+//   policy; callers that require immediate hardware enforcement must invalidate
+//   stale translations (e.g., via PagingHw) before reusing the freed pages.
+// - This helper is intentionally dumb: it assumes that every mapped 4 KiB page
+//   in the virtual interval translates to a page-aligned physical address.
+bool UnmapAndFreeBackingPages4KiB(
+	PhysicalMemoryManager* pmm,
+	const Paging::PageTableRoot& root,
+	KernelVirtualAddressAllocator* va_allocator,
+	std::uintptr_t virtual_base,
+	std::size_t size_bytes,
+	Paging::AddressSpaceBits address_bits
+);
+
 // I/O remap helper for device MMIO windows.
 //
 // Semantics:

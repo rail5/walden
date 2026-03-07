@@ -161,7 +161,7 @@ static void Test_KernelMappings_MapNewRange4KiB(TestContext* ctx) {
 	using Rocinante::Memory::KernelVirtualAddressAllocator;
 	using Rocinante::Memory::PhysicalMemoryManager;
 	using Rocinante::Memory::KernelMappings::MapNewRange4KiB;
-	using Rocinante::Memory::KernelMappings::UnmapAndFree4KiB;
+	using Rocinante::Memory::KernelMappings::UnmapAndFreeBackingPages4KiB;
 	using Rocinante::Memory::Paging::AccessPermissions;
 	using Rocinante::Memory::Paging::AddressSpaceBits;
 	using Rocinante::Memory::Paging::AllocateRootPageTable;
@@ -245,13 +245,127 @@ static void Test_KernelMappings_MapNewRange4KiB(TestContext* ctx) {
 		}
 	}
 
-	ROCINANTE_EXPECT_TRUE(ctx, UnmapAndFree4KiB(
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapAndFreeBackingPages4KiB(
 		&pmm,
 		root_or.value(),
 		&allocator,
 		mapped_or.value().virtual_base,
 		mapped_or.value().size_bytes,
 		address_bits));
+}
+
+static void Test_KernelMappings_MapNewRange4KiB_ReclaimsBackingPages(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::KernelVirtualAddressAllocator;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::KernelMappings::MapNewRange4KiB;
+	using Rocinante::Memory::KernelMappings::UnmapAndFreeBackingPages4KiB;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::PagePermissions;
+	namespace VirtualLayout = Rocinante::Memory::VirtualLayout;
+
+	auto& cpucfg = Rocinante::GetCPUCFG();
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = static_cast<std::uint8_t>(cpucfg.VirtualAddressBits()),
+		.physical_address_bits = static_cast<std::uint8_t>(cpucfg.PhysicalAddressBits()),
+	};
+	ROCINANTE_EXPECT_TRUE(ctx, address_bits.virtual_address_bits > 0);
+	ROCINANTE_EXPECT_TRUE(ctx, address_bits.virtual_address_bits < 64);
+
+	static constexpr std::uintptr_t kUsableBase = 0x01000000; // 16 MiB
+	static constexpr std::size_t kUsableSizeBytes = 8u * 1024u * 1024u; // 8 MiB
+
+	const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+	const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+	ROCINANTE_EXPECT_TRUE(ctx, kernel_physical_end > kernel_physical_base);
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(
+		map,
+		kernel_physical_base,
+		kernel_physical_end,
+		0,
+		0));
+
+	const auto root_or = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root_or.has_value());
+	if (!root_or.has_value()) return;
+
+	const PagePermissions permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	static constexpr std::size_t kPageCount = 4;
+	static constexpr std::size_t kSizeBytes = kPageCount * PhysicalMemoryManager::kPageSizeBytes;
+
+	// Constrain the VA allocator so there is only one valid placement for
+	// `kSizeBytes`, ensuring we reuse the same page tables across map/unmap.
+	const std::uintptr_t canonical_high_half_base = VirtualLayout::KernelHigherHalfBase(address_bits.virtual_address_bits);
+	KernelVirtualAddressAllocator allocator;
+	const std::uintptr_t managed_base = canonical_high_half_base + 0x04000000ull; // +64 MiB
+	const std::uintptr_t managed_limit = managed_base + kSizeBytes;
+	ROCINANTE_EXPECT_TRUE(ctx, managed_limit > managed_base);
+	allocator.Init(managed_base, managed_limit);
+	ROCINANTE_EXPECT_TRUE(ctx, allocator.IsInitialized());
+
+	// Baseline after all one-time allocations for this test (PMM init + root).
+	const std::size_t baseline_free_pages = pmm.FreePages();
+	ROCINANTE_EXPECT_TRUE(ctx, baseline_free_pages > 0);
+
+	const auto mapped_or = MapNewRange4KiB(
+		&pmm,
+		root_or.value(),
+		&allocator,
+		kSizeBytes,
+		permissions,
+		address_bits);
+	ROCINANTE_EXPECT_TRUE(ctx, mapped_or.has_value());
+	if (!mapped_or.has_value()) return;
+	ROCINANTE_EXPECT_EQ_U64(ctx, mapped_or.value().virtual_base, managed_base);
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePages() < baseline_free_pages);
+
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapAndFreeBackingPages4KiB(
+		&pmm,
+		root_or.value(),
+		&allocator,
+		mapped_or.value().virtual_base,
+		mapped_or.value().size_bytes,
+		address_bits));
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePages() == baseline_free_pages);
+
+	// Repeat once to ensure the mapping can be recreated and fully reclaimed.
+	const auto mapped_again_or = MapNewRange4KiB(
+		&pmm,
+		root_or.value(),
+		&allocator,
+		kSizeBytes,
+		permissions,
+		address_bits);
+	ROCINANTE_EXPECT_TRUE(ctx, mapped_again_or.has_value());
+	if (!mapped_again_or.has_value()) return;
+	ROCINANTE_EXPECT_EQ_U64(ctx, mapped_again_or.value().virtual_base, managed_base);
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePages() < baseline_free_pages);
+
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapAndFreeBackingPages4KiB(
+		&pmm,
+		root_or.value(),
+		&allocator,
+		mapped_again_or.value().virtual_base,
+		mapped_again_or.value().size_bytes,
+		address_bits));
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePages() == baseline_free_pages);
 }
 
 static void Test_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx) {
@@ -506,6 +620,10 @@ void TestEntry_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx) {
 
 void TestEntry_KernelMappings_MapNewRange4KiB(TestContext* ctx) {
 	Test_KernelMappings_MapNewRange4KiB(ctx);
+}
+
+void TestEntry_KernelMappings_MapNewRange4KiB_ReclaimsBackingPages(TestContext* ctx) {
+	Test_KernelMappings_MapNewRange4KiB_ReclaimsBackingPages(ctx);
 }
 
 void TestEntry_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx) {
