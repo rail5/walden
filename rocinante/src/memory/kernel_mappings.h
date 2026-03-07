@@ -23,6 +23,17 @@ struct MappedRange final {
 	std::size_t size_bytes;
 };
 
+struct GuardedMappedRange4KiB final {
+	std::uintptr_t guard_virtual_base;
+	std::size_t guard_size_bytes;
+	std::uintptr_t mapped_virtual_base;
+	std::size_t mapped_size_bytes;
+
+	std::uintptr_t MappedVirtualLimit() const {
+		return mapped_virtual_base + static_cast<std::uintptr_t>(mapped_size_bytes);
+	}
+};
+
 // Minimal kernel mapping helper (bring-up).
 //
 // This composes:
@@ -84,6 +95,31 @@ Rocinante::Optional<MappedRange> MapNewRange4KiB(
 	const Paging::PageTableRoot& root,
 	KernelVirtualAddressAllocator* va_allocator,
 	std::size_t size_bytes,
+	Paging::PagePermissions permissions,
+	Paging::AddressSpaceBits address_bits
+);
+
+// Maps a new stack-style range with a leading guard page.
+//
+// Why this exists:
+// - The kernel stack mapping wants an unmapped guard page directly below the
+//   mapped stack pages (the stack grows downward).
+// - This can not be expressed as `MapNewRange4KiB()` without extra ad-hoc glue,
+//   because `MapNewRange4KiB()` maps every page in the allocated range.
+//
+// Semantics:
+// - Allocates one contiguous VA region of size:
+//     (guard_page_count + mapped_page_count) * 4 KiB
+// - Leaves the guard pages unmapped.
+// - Allocates and maps `mapped_page_count` PMM pages starting at
+//   `mapped_virtual_base`.
+// - Rolls back on partial failure (unmap + free frames + free VA region).
+Rocinante::Optional<GuardedMappedRange4KiB> MapNewGuardedRange4KiB(
+	PhysicalMemoryManager* pmm,
+	const Paging::PageTableRoot& root,
+	KernelVirtualAddressAllocator* va_allocator,
+	std::size_t guard_page_count,
+	std::size_t mapped_page_count,
 	Paging::PagePermissions permissions,
 	Paging::AddressSpaceBits address_bits
 );
