@@ -7,6 +7,7 @@
 
 #include <src/memory/memory.h>
 #include <src/memory/heap.h>
+#include <src/memory/kernel_mappings.h>
 #include <src/memory/kernel_va_allocator.h>
 #include <src/memory/paging.h>
 #include <src/memory/paging_hw.h>
@@ -647,13 +648,6 @@ void RunPagingBringup(
 		if (higher_half_stack_top == 0) {
 			uart.puts("Paging bring-up: higher-half stack not mapped; skipping heap mapping\n");
 		} else {
-			const auto heap_virtual_or =
-				kernel_va.Allocate(kHeapSizeBytes, Rocinante::Memory::Paging::kPageSizeBytes);
-			if (!heap_virtual_or.has_value()) {
-				uart.puts("Paging bring-up: failed to allocate heap VA range\n");
-			} else {
-				const std::uintptr_t heap_virtual_base = heap_virtual_or.value();
-
 			Rocinante::Memory::Paging::PagePermissions heap_permissions{
 				.access = Rocinante::Memory::Paging::AccessPermissions::ReadWrite,
 				.execute = Rocinante::Memory::Paging::ExecutePermissions::NoExecute,
@@ -661,42 +655,27 @@ void RunPagingBringup(
 				.global = true,
 			};
 
-			bool heap_ok = true;
-			for (std::size_t i = 0; i < kHeapPageCount; i++) {
-				const auto page_or = pmm.AllocatePage();
-				if (!page_or.has_value()) {
-					uart.puts("Paging bring-up: failed to allocate heap page\n");
-					heap_ok = false;
-					break;
-				}
-				const std::uintptr_t heap_page_physical = page_or.value();
-				const std::uintptr_t heap_page_virtual = heap_virtual_base + (i * Rocinante::Memory::Paging::kPageSizeBytes);
-				if (!Rocinante::Memory::Paging::MapPage4KiB(
-					&pmm,
-					root,
-					heap_page_virtual,
-					heap_page_physical,
-					heap_permissions,
-					address_bits
-				)) {
-					uart.puts("Paging bring-up: failed to map heap page\n");
-					uart.puts("Paging bring-up: NOTE: heap mapping failure may leave partial mappings\n");
-					heap_ok = false;
-					break;
-				}
-			}
-
-				if (heap_ok) {
-					g_paging_bringup_heap_virtual_base = heap_virtual_base;
-					g_paging_bringup_heap_size_bytes = kHeapSizeBytes;
-					uart.puts("Paging bring-up: higher-half heap mapped; virt_base=");
-					uart.write_dec_u64(heap_virtual_base);
-					uart.puts(" size_bytes=");
-					uart.write_dec_u64(kHeapSizeBytes);
-					uart.puts(" pages=");
-					uart.write_dec_u64(kHeapPageCount);
-					uart.putc('\n');
-				}
+			const auto heap_or = Rocinante::Memory::KernelMappings::MapNewRange4KiB(
+				&pmm,
+				root,
+				&kernel_va,
+				kHeapSizeBytes,
+				heap_permissions,
+				address_bits
+			);
+			if (!heap_or.has_value()) {
+				uart.puts("Paging bring-up: failed to map heap range\n");
+			} else {
+				const std::uintptr_t heap_virtual_base = heap_or.value().virtual_base;
+				g_paging_bringup_heap_virtual_base = heap_virtual_base;
+				g_paging_bringup_heap_size_bytes = heap_or.value().size_bytes;
+				uart.puts("Paging bring-up: higher-half heap mapped; virt_base=");
+				uart.write_dec_u64(heap_virtual_base);
+				uart.puts(" size_bytes=");
+				uart.write_dec_u64(heap_or.value().size_bytes);
+				uart.puts(" pages=");
+				uart.write_dec_u64(kHeapPageCount);
+				uart.putc('\n');
 			}
 		}
 	}

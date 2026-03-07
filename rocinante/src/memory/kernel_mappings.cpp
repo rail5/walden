@@ -7,6 +7,7 @@
 
 #include <src/memory/kernel_va_allocator.h>
 #include <src/memory/pmm.h>
+#include <src/memory/paging.h>
 
 namespace Rocinante::Memory::KernelMappings {
 
@@ -60,6 +61,65 @@ Rocinante::Optional<MappedRange> MapPhysicalRange4KiB(
 			const std::uintptr_t virtual_page = virtual_base + unmapped_bytes;
 			(void)Paging::UnmapPage4KiB(root, virtual_page, address_bits);
 			unmapped_bytes += Rocinante::Memory::Paging::kPageSizeBytes;
+		}
+		(void)va_allocator->Free(virtual_base, size_bytes);
+		return Rocinante::nullopt;
+	}
+
+	return MappedRange{.virtual_base = virtual_base, .size_bytes = size_bytes};
+}
+
+Rocinante::Optional<MappedRange> MapNewRange4KiB(
+	PhysicalMemoryManager* pmm,
+	const Paging::PageTableRoot& root,
+	KernelVirtualAddressAllocator* va_allocator,
+	std::size_t size_bytes,
+	Paging::PagePermissions permissions,
+	Paging::AddressSpaceBits address_bits
+) {
+	if (!pmm || !va_allocator) return Rocinante::nullopt;
+	if (size_bytes == 0) return Rocinante::nullopt;
+	if ((size_bytes % Rocinante::Memory::Paging::kPageSizeBytes) != 0) return Rocinante::nullopt;
+
+	const auto virtual_base_or = va_allocator->Allocate(size_bytes, Rocinante::Memory::Paging::kPageSizeBytes);
+	if (!virtual_base_or.has_value()) return Rocinante::nullopt;
+	const std::uintptr_t virtual_base = virtual_base_or.value();
+
+	std::size_t mapped_bytes = 0;
+	while (mapped_bytes < size_bytes) {
+		const auto physical_page_or = pmm->AllocatePage();
+		if (!physical_page_or.has_value()) break;
+		const std::uintptr_t physical_page = physical_page_or.value();
+		if (!IsPageAligned(physical_page)) {
+			(void)pmm->FreePage(physical_page);
+			break;
+		}
+
+		const std::uintptr_t virtual_page = virtual_base + mapped_bytes;
+		if (!Paging::MapPage4KiB(
+			pmm,
+			root,
+			virtual_page,
+			physical_page,
+			permissions,
+			address_bits)) {
+			(void)pmm->FreePage(physical_page);
+			break;
+		}
+
+		mapped_bytes += Rocinante::Memory::Paging::kPageSizeBytes;
+	}
+
+	if (mapped_bytes != size_bytes) {
+		std::size_t rolled_back_bytes = 0;
+		while (rolled_back_bytes < mapped_bytes) {
+			const std::uintptr_t virtual_page = virtual_base + rolled_back_bytes;
+			const auto physical_or = Paging::Translate(root, virtual_page, address_bits);
+			(void)Paging::UnmapPage4KiB(root, virtual_page, address_bits);
+			if (physical_or.has_value()) {
+				(void)pmm->FreePage(physical_or.value());
+			}
+			rolled_back_bytes += Rocinante::Memory::Paging::kPageSizeBytes;
 		}
 		(void)va_allocator->Free(virtual_base, size_bytes);
 		return Rocinante::nullopt;

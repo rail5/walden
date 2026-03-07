@@ -157,10 +157,109 @@ static void Test_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx) {
 		address_bits));
 }
 
+static void Test_KernelMappings_MapNewRange4KiB(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::KernelVirtualAddressAllocator;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::KernelMappings::MapNewRange4KiB;
+	using Rocinante::Memory::KernelMappings::UnmapAndFree4KiB;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::Translate;
+
+	auto& cpucfg = Rocinante::GetCPUCFG();
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = static_cast<std::uint8_t>(cpucfg.VirtualAddressBits()),
+		.physical_address_bits = static_cast<std::uint8_t>(cpucfg.PhysicalAddressBits()),
+	};
+	ROCINANTE_EXPECT_TRUE(ctx, address_bits.virtual_address_bits > 0);
+	ROCINANTE_EXPECT_TRUE(ctx, address_bits.virtual_address_bits < 64);
+
+	static constexpr std::uintptr_t kUsableBase = 0x01000000; // 16 MiB
+	static constexpr std::size_t kUsableSizeBytes = 8u * 1024u * 1024u; // 8 MiB
+
+	const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+	const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+	ROCINANTE_EXPECT_TRUE(ctx, kernel_physical_end > kernel_physical_base);
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(
+		map,
+		kernel_physical_base,
+		kernel_physical_end,
+		0,
+		0));
+
+	const auto root_or = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root_or.has_value());
+	if (!root_or.has_value()) return;
+
+	std::uintptr_t low_mask = 0;
+	for (std::uint8_t i = 0; i < address_bits.virtual_address_bits; i++) {
+		low_mask = (low_mask << 1) | 1u;
+	}
+	const std::uintptr_t upper_mask = ~low_mask;
+	const std::uintptr_t sign_bit = (low_mask + 1) >> 1;
+	const std::uintptr_t canonical_high_half_base = upper_mask | sign_bit;
+
+	KernelVirtualAddressAllocator allocator;
+	const std::uintptr_t managed_base = canonical_high_half_base + 0x02000000ull; // +32 MiB
+	const std::uintptr_t managed_limit = managed_base + (8u * PhysicalMemoryManager::kPageSizeBytes);
+	allocator.Init(managed_base, managed_limit);
+	ROCINANTE_EXPECT_TRUE(ctx, allocator.IsInitialized());
+
+	const PagePermissions permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	static constexpr std::size_t kPageCount = 4;
+	static constexpr std::size_t kSizeBytes = kPageCount * PhysicalMemoryManager::kPageSizeBytes;
+
+	const auto mapped_or = MapNewRange4KiB(
+		&pmm,
+		root_or.value(),
+		&allocator,
+		kSizeBytes,
+		permissions,
+		address_bits);
+	ROCINANTE_EXPECT_TRUE(ctx, mapped_or.has_value());
+	if (!mapped_or.has_value()) return;
+	ROCINANTE_EXPECT_EQ_U64(ctx, mapped_or.value().size_bytes, kSizeBytes);
+
+	for (std::size_t i = 0; i < kPageCount; i++) {
+		const std::uintptr_t page_virtual = mapped_or.value().virtual_base + (i * PhysicalMemoryManager::kPageSizeBytes);
+		const auto translated = Translate(root_or.value(), page_virtual, address_bits);
+		ROCINANTE_EXPECT_TRUE(ctx, translated.has_value());
+		if (translated.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, translated.value() % PhysicalMemoryManager::kPageSizeBytes, 0);
+		}
+	}
+
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapAndFree4KiB(
+		root_or.value(),
+		&allocator,
+		mapped_or.value().virtual_base,
+		mapped_or.value().size_bytes,
+		address_bits));
+}
+
 } // namespace
 
 void TestEntry_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx) {
 	Test_KernelMappings_MapTranslateUnmapAndFree(ctx);
+	Test_KernelMappings_MapNewRange4KiB(ctx);
 }
 
 } // namespace Rocinante::Testing
