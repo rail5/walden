@@ -287,10 +287,11 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 			if (map_size_rounded == 0) {
 				uart.puts("Paging bring-up:   identity teardown skipped (zero kernel size)\n");
 			} else {
+				auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
 				for (std::size_t offset_bytes = 0; offset_bytes < map_size_rounded; offset_bytes += Rocinante::Memory::Paging::kPageSizeBytes) {
 					const std::uintptr_t low_virtual_page_base =
 						kernel_physical_base + static_cast<std::uintptr_t>(offset_bytes);
-					(void)Rocinante::Memory::Paging::UnmapPage4KiB(root, low_virtual_page_base, paging_state->address_bits);
+					(void)Rocinante::Memory::Paging::UnmapPage4KiB(&pmm, root, low_virtual_page_base, paging_state->address_bits);
 				}
 
 				uart.puts("Paging bring-up:   INVTLB op=0 (flush all)\n");

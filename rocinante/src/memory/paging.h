@@ -169,10 +169,9 @@ bool MapPage4KiB(
 
 /**
  * @brief Unmaps one 4 KiB page.
- *
- * This does not currently free empty intermediate tables.
  */
 bool UnmapPage4KiB(
+	PhysicalMemoryManager* pmm,
 	const PageTableRoot& root,
 	std::uintptr_t virtual_address
 );
@@ -181,6 +180,7 @@ bool UnmapPage4KiB(
  * @brief Unmaps one 4 KiB page using runtime-reported address widths.
  */
 bool UnmapPage4KiB(
+	PhysicalMemoryManager* pmm,
 	const PageTableRoot& root,
 	std::uintptr_t virtual_address,
 	AddressSpaceBits address_bits

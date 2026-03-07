@@ -790,7 +790,7 @@ static void Test_PagingHw_PostPaging_MapUnmap_Faults(TestContext* ctx) {
 	*mapped_u64 = 0x55aa55aa55aa55aaull;
 	ROCINANTE_EXPECT_EQ_U64(ctx, *mapped_u64, 0x55aa55aa55aa55aaull);
 
-	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(root, kPostPagingMapUnmapVirtualPageBase, address_bits));
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root, kPostPagingMapUnmapVirtualPageBase, address_bits));
 	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
 
 	ArmExpectedTrap(kExceptionCodePis);
@@ -1377,9 +1377,9 @@ nx_resume:
 	ROCINANTE_EXPECT_EQ_U64(ctx, observed_store_value, 0);
 
 	// Clean up the mapping to avoid TLB/page-table state leaking into later tests.
-	(void)UnmapPage4KiB(root, kNxAliasVirtualPageBase, address_bits);
+	(void)UnmapPage4KiB(&pmm, root, kNxAliasVirtualPageBase, address_bits);
 	if (mapped1) {
-		(void)UnmapPage4KiB(root, kNxAliasVirtualPageBase + PhysicalMemoryManager::kPageSizeBytes, address_bits);
+		(void)UnmapPage4KiB(&pmm, root, kNxAliasVirtualPageBase + PhysicalMemoryManager::kPageSizeBytes, address_bits);
 	}
 	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
 }

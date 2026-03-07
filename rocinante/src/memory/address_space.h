@@ -26,7 +26,7 @@ class PhysicalMemoryManager;
  * Non-goals (explicit for now):
  * - No VMA model (regions, permissions policy, accounting).
  * - No user/kernel split policy.
- * - No teardown that reclaims intermediate page tables.
+ * - No teardown that reclaims mapped frames or the root page table.
  * - No SMP safety.
  */
 class AddressSpace final {
@@ -53,7 +53,7 @@ public:
 		std::size_t size_bytes,
 		Paging::PagePermissions permissions) const;
 
-	bool UnmapPage4KiB(std::uintptr_t virtual_address) const;
+	bool UnmapPage4KiB(PhysicalMemoryManager* physical_memory_manager, std::uintptr_t virtual_address) const;
 
 private:
 	AddressSpace(Paging::PageTableRoot low_half_root, Paging::AddressSpaceBits address_bits, std::uint16_t address_space_id)

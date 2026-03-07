@@ -52,8 +52,8 @@ bool AddressSpace::MapRange4KiB(
 		address_bits_);
 }
 
-bool AddressSpace::UnmapPage4KiB(std::uintptr_t virtual_address) const {
-	return Paging::UnmapPage4KiB(low_half_root_, virtual_address, address_bits_);
+bool AddressSpace::UnmapPage4KiB(PhysicalMemoryManager* physical_memory_manager, std::uintptr_t virtual_address) const {
+	return Paging::UnmapPage4KiB(physical_memory_manager, low_half_root_, virtual_address, address_bits_);
 }
 
 } // namespace Rocinante::Memory

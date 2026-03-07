@@ -78,9 +78,81 @@ static void Test_Paging_MapTranslateUnmap(TestContext* ctx) {
 	ROCINANTE_EXPECT_TRUE(ctx, translated.has_value());
 	ROCINANTE_EXPECT_EQ_U64(ctx, translated.value(), physical_page_base);
 
-	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(root.value(), kVirtualPageBase));
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root.value(), kVirtualPageBase));
 	const auto translated_after_unmap = Translate(root.value(), kVirtualPageBase);
 	ROCINANTE_EXPECT_TRUE(ctx, !translated_after_unmap.has_value());
+}
+
+static void Test_Paging_UnmapReclaimsIntermediateTables(TestContext* ctx) {
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapPage4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::UnmapPage4KiB;
+
+	// Regression guard:
+	// Unmapping the last page in a subtree should reclaim empty intermediate
+	// page-table pages back to the PMM.
+
+	static constexpr std::uintptr_t kUsableBase = 0x01000000;
+	static constexpr std::size_t kUsableSizeBytes = 128 * PhysicalMemoryManager::kPageSizeBytes;
+
+	static constexpr std::uintptr_t kKernelBase = 0x00600000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00601000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00700000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	const auto root_or = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root_or.has_value());
+	if (!root_or.has_value()) return;
+
+	const auto backing_page_or = pmm.AllocatePage();
+	ROCINANTE_EXPECT_TRUE(ctx, backing_page_or.has_value());
+	if (!backing_page_or.has_value()) return;
+	const std::uintptr_t backing_physical = backing_page_or.value();
+
+	const PagePermissions permissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	// Use a fixed, smaller address-width configuration to make level-count
+	// deterministic for this test.
+	const AddressSpaceBits bits{.virtual_address_bits = 39, .physical_address_bits = 44};
+
+	static constexpr std::uintptr_t kVirtualPageBase0 = 0x0000000000100000ull;
+	static constexpr std::uintptr_t kVirtualPageBase1 = kVirtualPageBase0 + PhysicalMemoryManager::kPageSizeBytes;
+
+	const std::size_t free_before_map = pmm.FreePages();
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(&pmm, root_or.value(), kVirtualPageBase0, backing_physical, permissions, bits));
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(&pmm, root_or.value(), kVirtualPageBase1, backing_physical, permissions, bits));
+	const std::size_t free_after_map = pmm.FreePages();
+	ROCINANTE_EXPECT_TRUE(ctx, free_after_map <= free_before_map);
+
+	// Unmapping one of two pages in the same leaf table should not reclaim the tables.
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root_or.value(), kVirtualPageBase0, bits));
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_after_map);
+
+	// Unmapping the last page should reclaim the now-empty subtree.
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root_or.value(), kVirtualPageBase1, bits));
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before_map);
+
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePage(backing_physical));
 }
 
 static void Test_Paging_RespectsVALENAndPALEN(TestContext* ctx) {
@@ -353,6 +425,10 @@ static void Test_Paging_Physmap_MapsRootPageTableAndAttributes(TestContext* ctx)
 
 void TestEntry_Paging_MapTranslateUnmap(TestContext* ctx) {
 	Test_Paging_MapTranslateUnmap(ctx);
+}
+
+void TestEntry_Paging_UnmapReclaimsIntermediateTables(TestContext* ctx) {
+	Test_Paging_UnmapReclaimsIntermediateTables(ctx);
 }
 
 void TestEntry_Paging_RespectsVALENAndPALEN(TestContext* ctx) {

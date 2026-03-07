@@ -183,6 +183,14 @@ static bool EntryIsPresent(std::uint64_t entry) {
 	return (entry & (PteBits::kPresent | PteBits::kValid)) == (PteBits::kPresent | PteBits::kValid);
 }
 
+static bool TableIsEmpty(const PageTablePage* table) {
+	if (!table) return false;
+	for (std::size_t i = 0; i < kEntriesPerTable; i++) {
+		if (EntryIsPresent(table->entries[i])) return false;
+	}
+	return true;
+}
+
 static std::uintptr_t EntryPhysicalPageBase(std::uint64_t entry, std::uint64_t physical_page_base_mask) {
 	return static_cast<std::uintptr_t>(entry & physical_page_base_mask);
 }
@@ -428,15 +436,17 @@ bool MapPage4KiB(
 	return true;
 }
 
-bool UnmapPage4KiB(const PageTableRoot& root, std::uintptr_t virtual_address) {
+bool UnmapPage4KiB(PhysicalMemoryManager* pmm, const PageTableRoot& root, std::uintptr_t virtual_address) {
 	return UnmapPage4KiB(
+		pmm,
 		root,
 		virtual_address,
 		AddressSpaceBitsFromCPUCFG()
 	);
 }
 
-bool UnmapPage4KiB(const PageTableRoot& root, std::uintptr_t virtual_address, AddressSpaceBits address_bits) {
+bool UnmapPage4KiB(PhysicalMemoryManager* pmm, const PageTableRoot& root, std::uintptr_t virtual_address, AddressSpaceBits address_bits) {
+	if (!pmm) return false;
 	const auto layout_opt = BuildLayout(address_bits);
 	if (!layout_opt.has_value()) return false;
 	const Layout layout = layout_opt.value();
@@ -445,23 +455,56 @@ bool UnmapPage4KiB(const PageTableRoot& root, std::uintptr_t virtual_address, Ad
 	if (!ValidateVirtualAddress(virtual_address, layout)) return false;
 	if (!IsPageAligned(virtual_address)) return false;
 
+	if (layout.level_count > kMaxSupportedLevelCount) return false;
+
+	PageTablePage* tables_by_level[kMaxSupportedLevelCount] = {};
+	std::uintptr_t physical_by_level[kMaxSupportedLevelCount] = {};
+	std::size_t child_index_by_level[kMaxSupportedLevelCount] = {};
+
 	auto* table = PageTablePageFromPhysical(root.root_physical_address);
 	if (!table) return false;
+	const std::size_t root_level = static_cast<std::size_t>(layout.level_count - 1);
+	tables_by_level[root_level] = table;
+	physical_by_level[root_level] = root.root_physical_address;
 
 	for (std::size_t level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
 		const std::size_t index = IndexFromVirtualAddressAtLevel(virtual_address, level);
+		child_index_by_level[level] = index;
 		const std::uint64_t entry = table->entries[index];
 		// This software walker does not yet support huge pages. In the LoongArch
 		// privileged spec, bit 6 being set in a directory entry indicates a huge-page mapping.
 		if ((entry & PteBits::kGlobal) != 0) return false;
 		if (!EntryIsPresent(entry)) return false;
-		table = PageTablePageFromPhysical(EntryPhysicalPageBase(entry, layout.physical_page_base_mask));
+		const std::uintptr_t next_physical = EntryPhysicalPageBase(entry, layout.physical_page_base_mask);
+		table = PageTablePageFromPhysical(next_physical);
 		if (!table) return false;
+		tables_by_level[level - 1] = table;
+		physical_by_level[level - 1] = next_physical;
 	}
 
 	const std::size_t leaf_index = IndexFromVirtualAddressAtLevel(virtual_address, 0);
 	if (!EntryIsPresent(table->entries[leaf_index])) return false;
 	table->entries[leaf_index] = 0;
+
+	// Policy: reclaim empty intermediate page-table pages.
+	//
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - INVTLB maintains consistency between page tables and the TLB.
+	//   Callers that rely on immediate hardware enforcement must invalidate stale
+	//   TLB entries after changing page tables.
+	for (std::size_t level = 0; (level + 1) < layout.level_count; level++) {
+		PageTablePage* current = tables_by_level[level];
+		if (!current) return false;
+		if (!TableIsEmpty(current)) break;
+
+		const std::uintptr_t current_physical = physical_by_level[level];
+		if (current_physical == 0) return false;
+		if (!pmm->FreePage(current_physical)) return false;
+
+		PageTablePage* parent = tables_by_level[level + 1];
+		if (!parent) return false;
+		parent->entries[child_index_by_level[level + 1]] = 0;
+	}
 	return true;
 }
 

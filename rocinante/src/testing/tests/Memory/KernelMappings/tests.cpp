@@ -114,6 +114,7 @@ static void Test_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx) {
 	}
 
 	ROCINANTE_EXPECT_TRUE(ctx, UnmapAndFree4KiB(
+		&pmm,
 		root_or.value(),
 		&allocator,
 		mapped_or.value().virtual_base,
@@ -146,6 +147,7 @@ static void Test_KernelMappings_MapTranslateUnmapAndFree(TestContext* ctx) {
 	}
 
 	ROCINANTE_EXPECT_TRUE(ctx, UnmapAndFree4KiB(
+		&pmm,
 		root_or.value(),
 		&allocator,
 		mapped_again_or.value().virtual_base,
@@ -244,6 +246,7 @@ static void Test_KernelMappings_MapNewRange4KiB(TestContext* ctx) {
 	}
 
 	ROCINANTE_EXPECT_TRUE(ctx, UnmapAndFree4KiB(
+		&pmm,
 		root_or.value(),
 		&allocator,
 		mapped_or.value().virtual_base,
@@ -353,7 +356,7 @@ static void Test_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx) {
 	for (std::size_t i = 0; i < kMappedPages; i++) {
 		const std::uintptr_t page_virtual = mapped_or.value().mapped_virtual_base + (i * PhysicalMemoryManager::kPageSizeBytes);
 		const auto physical_or = Translate(root_or.value(), page_virtual, address_bits);
-		ROCINANTE_EXPECT_TRUE(ctx, Rocinante::Memory::Paging::UnmapPage4KiB(root_or.value(), page_virtual, address_bits));
+		ROCINANTE_EXPECT_TRUE(ctx, Rocinante::Memory::Paging::UnmapPage4KiB(&pmm, root_or.value(), page_virtual, address_bits));
 		ROCINANTE_EXPECT_TRUE(ctx, physical_or.has_value());
 		if (physical_or.has_value()) {
 			ROCINANTE_EXPECT_TRUE(ctx, pmm.FreePage(physical_or.value()));
@@ -455,7 +458,7 @@ static void Test_KernelMappings_IoremapMmio4KiB(TestContext* ctx) {
 			ROCINANTE_EXPECT_EQ_U64(ctx, translated_last.value(), physical_base + (kSizeBytes - 1));
 		}
 
-		ROCINANTE_EXPECT_TRUE(ctx, IounmapMmio4KiB(root_or.value(), &allocator, mapped_or.value(), address_bits));
+		ROCINANTE_EXPECT_TRUE(ctx, IounmapMmio4KiB(&pmm, root_or.value(), &allocator, mapped_or.value(), address_bits));
 		ROCINANTE_EXPECT_TRUE(ctx, !Translate(root_or.value(), mapped_or.value().virtual_base, address_bits).has_value());
 	}
 
@@ -490,7 +493,7 @@ static void Test_KernelMappings_IoremapMmio4KiB(TestContext* ctx) {
 			ROCINANTE_EXPECT_EQ_U64(ctx, translated_last.value(), physical_base + (kSizeBytes - 1));
 		}
 
-		ROCINANTE_EXPECT_TRUE(ctx, IounmapMmio4KiB(root_or.value(), &allocator, mapped_or.value(), address_bits));
+		ROCINANTE_EXPECT_TRUE(ctx, IounmapMmio4KiB(&pmm, root_or.value(), &allocator, mapped_or.value(), address_bits));
 		ROCINANTE_EXPECT_TRUE(ctx, !Translate(root_or.value(), mapped_or.value().virtual_base, address_bits).has_value());
 	}
 }

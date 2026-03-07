@@ -136,6 +136,7 @@ Rocinante::Optional<GuardedMappedRange4KiB> MapNewGuardedRange4KiB(
 );
 
 bool UnmapAndFree4KiB(
+	PhysicalMemoryManager* pmm,
 	const Paging::PageTableRoot& root,
 	KernelVirtualAddressAllocator* va_allocator,
 	std::uintptr_t virtual_base,
@@ -162,6 +163,7 @@ Rocinante::Optional<MmioMappedRange4KiB> IoremapMmio4KiB(
 );
 
 bool IounmapMmio4KiB(
+	PhysicalMemoryManager* pmm,
 	const Paging::PageTableRoot& root,
 	KernelVirtualAddressAllocator* va_allocator,
 	const MmioMappedRange4KiB& mapping,
