@@ -19,7 +19,7 @@ namespace Rocinante::Memory::KernelPager {
 // Non-goals (bring-up flaws):
 // - No metadata/ownership tracking.
 // - No user faults / address spaces / ASIDs.
-// - No per-ASID or per-page TLB invalidation (flush-all only).
+// - No per-page reclamation / unmap policy.
 // - Not SMP-safe.
 
 struct LazyMappingRegion final {

@@ -192,8 +192,19 @@ Rocinante::Trap::PagingFaultResult PagingFaultObserver(
 	// Ensure the retried instruction observes the updated page tables.
 	//
 	// Spec anchor (LoongArch-Vol1-EN.html):
-	// - Section 4.2.4.7 (INVTLB) + Table 13: op=0 clears all TLB entries.
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	// - Section 4.2.4.7 (INVTLB) + Table 13:
+	//   - op=0x5 clears G=0 entries matching {ASID, VA}.
+	//   - op=0x2 clears all G=1 (global) entries.
+	//
+	// Policy (bring-up):
+	// - Invalidate the faulting VA for the current ASID.
+	// - If we installed a global mapping (G=1), also invalidate global entries
+	//   system-wide, since global translations do not participate in ASID matching.
+	const std::uint16_t current_asid = Rocinante::Memory::PagingHw::GetAddressSpaceId();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntryForAsidAndVa(current_asid, fault_virtual_page_base);
+	if (vma->permissions.global) {
+		Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	}
 
 	// Logging policy (bring-up): emit one concise line per mapped page.
 	auto& uart = Rocinante::Platform::GetEarlyUart();

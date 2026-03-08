@@ -7,6 +7,8 @@
 
 #include <src/memory/boot_memory_map.h>
 #include <src/memory/pmm.h>
+#include <src/memory/paging.h>
+#include <src/memory/vmm_unmap.h>
 #include <src/memory/vm_object.h>
 #include <src/memory/vma.h>
 
@@ -240,6 +242,131 @@ static void Test_VMM_AnonymousVmObject_Ownership(TestContext* ctx) {
 	}
 }
 
+static void Test_VMM_UnmapVma4KiB_ReleasesAnonymousFrames(TestContext* ctx) {
+	using Rocinante::Memory::AnonymousVmObject;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::GetPhysicalMemoryManager;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::VirtualMemoryArea;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AllocateRootPageTable;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::MapPage4KiB;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::Translate;
+	using Rocinante::Memory::Paging::UnmapPage4KiB;
+	using Rocinante::Memory::VmmUnmap::UnmapVma4KiB;
+
+	// This test exercises the software page table builder/walker.
+	// It does not enable paging in hardware.
+
+	static constexpr std::uintptr_t kUsableBase = 0x00100000;
+	static constexpr std::size_t kUsableSizeBytes = 256 * PhysicalMemoryManager::kPageSizeBytes;
+
+	// Keep kernel/DTB reservations outside our usable range for this test.
+	static constexpr std::uintptr_t kKernelBase = 0x00400000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00401000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00500000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	const auto root_or = AllocateRootPageTable(&pmm);
+	ROCINANTE_EXPECT_TRUE(ctx, root_or.has_value());
+	if (!root_or.has_value()) return;
+
+	static constexpr std::uintptr_t kVirtualPageBase = 0x0000000000200000ull;
+	static_assert((kVirtualPageBase % PhysicalMemoryManager::kPageSizeBytes) == 0);
+
+	AnonymousVmObject object;
+	VirtualMemoryArea vma;
+	vma.virtual_base = kVirtualPageBase;
+	vma.virtual_limit = kVirtualPageBase + PhysicalMemoryManager::kPageSizeBytes;
+	vma.backing_type = VirtualMemoryArea::BackingType::Anonymous;
+	vma.anonymous_object = &object;
+	vma.owns_frames = true;
+
+	static constexpr PagePermissions kPermissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+	vma.permissions = kPermissions;
+
+	const auto frame_or = object.GetOrCreateFrameForPageOffset(&pmm, 0);
+	ROCINANTE_EXPECT_TRUE(ctx, frame_or.has_value());
+	if (!frame_or.has_value()) return;
+	const std::uintptr_t physical_page_base = frame_or.value().physical_page_base;
+
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(&pmm, root_or.value(), kVirtualPageBase, physical_page_base, kPermissions));
+
+	// Sanity: mapped and tracked.
+	ROCINANTE_EXPECT_TRUE(ctx, Translate(root_or.value(), kVirtualPageBase).has_value());
+	{
+		const auto map_count = pmm.MapCountForPhysical(physical_page_base);
+		ROCINANTE_EXPECT_TRUE(ctx, map_count.has_value());
+		if (map_count.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, map_count.value(), 1);
+		}
+	}
+	{
+		const auto ref_count = pmm.ReferenceCountForPhysical(physical_page_base);
+		ROCINANTE_EXPECT_TRUE(ctx, ref_count.has_value());
+		if (ref_count.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, ref_count.value(), 1);
+		}
+	}
+
+	// Demonstrate the invariant boundary explicitly:
+	// - Unmapping removes the leaf PTE and decrements map_count.
+	// - The frame is NOT freeable while the object still holds ref_count.
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root_or.value(), kVirtualPageBase));
+	ROCINANTE_EXPECT_TRUE(ctx, !Translate(root_or.value(), kVirtualPageBase).has_value());
+	{
+		const auto map_count = pmm.MapCountForPhysical(physical_page_base);
+		ROCINANTE_EXPECT_TRUE(ctx, map_count.has_value());
+		if (map_count.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, map_count.value(), 0);
+		}
+	}
+	{
+		const auto ref_count = pmm.ReferenceCountForPhysical(physical_page_base);
+		ROCINANTE_EXPECT_TRUE(ctx, ref_count.has_value());
+		if (ref_count.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, ref_count.value(), 1);
+		}
+	}
+
+	// Remap and then exercise the VMM unmap helper, which also releases object ownership.
+	ROCINANTE_EXPECT_TRUE(ctx, MapPage4KiB(&pmm, root_or.value(), kVirtualPageBase, physical_page_base, kPermissions));
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapVma4KiB(&pmm, root_or.value(), vma));
+
+	ROCINANTE_EXPECT_TRUE(ctx, !Translate(root_or.value(), kVirtualPageBase).has_value());
+	{
+		const auto map_count = pmm.MapCountForPhysical(physical_page_base);
+		ROCINANTE_EXPECT_TRUE(ctx, map_count.has_value());
+		if (map_count.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, map_count.value(), 0);
+		}
+	}
+	{
+		const auto ref_count = pmm.ReferenceCountForPhysical(physical_page_base);
+		ROCINANTE_EXPECT_TRUE(ctx, ref_count.has_value());
+		if (ref_count.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, ref_count.value(), 0);
+		}
+	}
+	ROCINANTE_EXPECT_TRUE(ctx, object.IsEmpty());
+}
+
 } // namespace
 
 void TestEntry_VMM_VMA_InsertLookup(TestContext* ctx) {
@@ -248,6 +375,10 @@ void TestEntry_VMM_VMA_InsertLookup(TestContext* ctx) {
 
 void TestEntry_VMM_AnonymousVmObject_Ownership(TestContext* ctx) {
 	Test_VMM_AnonymousVmObject_Ownership(ctx);
+}
+
+void TestEntry_VMM_UnmapVma4KiB_ReleasesAnonymousFrames(TestContext* ctx) {
+	Test_VMM_UnmapVma4KiB_ReleasesAnonymousFrames(ctx);
 }
 
 } // namespace Rocinante::Testing

@@ -10,11 +10,12 @@
 #include <src/memory/paging_state.h>
 #include <src/memory/pmm.h>
 
+#include <src/sp/cpucfg.h>
+
 #include <src/platform/console.h>
 #include <src/sp/uart16550.h>
 #include <src/trap/trap.h>
 
-#include <cstddef>
 #include <cstdint>
 
 namespace {
@@ -96,9 +97,24 @@ static Rocinante::Trap::PagingFaultResult KernelPagerPagingFaultObserver(
 	}
 
 	const auto* paging_state = Rocinante::Memory::TryGetPagingState();
-	if (!paging_state) {
-		g_handling = false;
-		return Rocinante::Trap::PagingFaultResult::NotHandled;
+
+	// Address-width configuration for software page-table walking.
+	//
+	// Bring-up policy:
+	// - Prefer the installed PagingState if present (it represents the kernel's
+	//   chosen effective address widths).
+	// - Fall back to CPUCFG-reported widths (VALEN/PALEN) otherwise.
+	//
+	// This keeps the pager usable in paging-hardware tests that enable paging
+	// before higher-level memory subsystems install a PagingState.
+	Rocinante::Memory::Paging::AddressSpaceBits address_bits{};
+	if (paging_state) {
+		address_bits = paging_state->address_bits;
+	} else {
+		address_bits = Rocinante::Memory::Paging::AddressSpaceBits{
+			.virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits()),
+			.physical_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().PhysicalAddressBits()),
+		};
 	}
 
 	// Map the missing page into the effective root for the faulting address.
@@ -111,7 +127,7 @@ static Rocinante::Trap::PagingFaultResult KernelPagerPagingFaultObserver(
 	};
 
 	// If the page is already mapped, this policy does not attempt to "repair" it.
-	if (Rocinante::Memory::Paging::Translate(root, fault_virtual_page_base, paging_state->address_bits).has_value()) {
+	if (Rocinante::Memory::Paging::Translate(root, fault_virtual_page_base, address_bits).has_value()) {
 		g_handling = false;
 		return Rocinante::Trap::PagingFaultResult::NotHandled;
 	}
@@ -142,7 +158,7 @@ static Rocinante::Trap::PagingFaultResult KernelPagerPagingFaultObserver(
 		fault_virtual_page_base,
 		physical_page,
 		kPermissions,
-		paging_state->address_bits
+		address_bits
 	);
 	if (!mapped) {
 		(void)pmm.FreePage(physical_page);
@@ -153,8 +169,17 @@ static Rocinante::Trap::PagingFaultResult KernelPagerPagingFaultObserver(
 	// Ensure the retried instruction observes the updated page tables.
 	//
 	// Spec anchor (LoongArch-Vol1-EN.html):
-	// - Section 4.2.4.7 (INVTLB) + Table 13: op=0 clears all TLB entries.
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	// - Section 4.2.4.7 (INVTLB) + Table 13:
+	//   - op=0x5 clears G=0 entries matching {ASID, VA}.
+	//   - op=0x2 clears all G=1 (global) entries.
+	//
+	// Policy (bring-up):
+	// - Invalidate the faulting VA for the active ASID.
+	// - This pager installs global (G=1) mappings, so also invalidate global
+	//   entries system-wide.
+	const std::uint16_t current_asid = Rocinante::Memory::PagingHw::GetAddressSpaceId();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntryForAsidAndVa(current_asid, fault_virtual_page_base);
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
 
 	// Logging policy (bring-up): emit one concise line per mapped page.
 	auto& uart = Rocinante::Platform::GetEarlyUart();

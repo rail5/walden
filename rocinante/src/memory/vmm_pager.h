@@ -22,7 +22,8 @@ void ConfigureKernelVirtualMemoryAreas(const VirtualMemoryAreaSet* areas);
 // Policy (bring-up):
 // - Only handles kernel-mode (PLV0) faults.
 // - Only handles page-invalid load/store (PIL/PIS) faults.
-// - Uses coarse TLB invalidation (flush-all) after successful mapping.
+// - Uses per-page TLB invalidation for the active ASID after successful mapping.
+// - If the mapping is global (G=1), it also invalidates global TLB entries.
 Rocinante::Trap::PagingFaultResult PagingFaultObserver(
 	Rocinante::TrapFrame& tf,
 	const Rocinante::Trap::PagingFaultEvent& event

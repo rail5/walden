@@ -120,6 +120,106 @@ class AnonymousVmObject final {
 		}
 
 		/**
+		 * @brief Drops this object's ownership of the frame at `page_offset`.
+		 *
+		 * Semantics:
+		 * - If a frame exists for `page_offset`, clear the mapping and release the
+		 *   frame via PMM (`ref_count` decrement).
+		 * - If no frame exists, this is a no-op and returns true.
+		 *
+		 * This does not require paging to be enabled in hardware.
+		 */
+		bool ReleaseFrameForPageOffset(PhysicalMemoryManager* pmm, std::size_t page_offset) {
+			if (!pmm) return false;
+			if (m_root_directory_physical == 0) return true;
+			if (m_block_index_levels == 0) return false;
+
+			static constexpr std::size_t kIndexBitsPerLevel = 9;
+			static constexpr std::size_t kEntriesPerRadixPage = 512;
+			static constexpr std::size_t kBlockMask = kEntriesPerRadixPage - 1;
+			static_assert((kEntriesPerRadixPage & (kEntriesPerRadixPage - 1)) == 0);
+
+			constexpr std::size_t kMaxDirectoryLevels = (sizeof(std::size_t) * 8 + kIndexBitsPerLevel - 1) / kIndexBitsPerLevel;
+			if (m_block_index_levels > kMaxDirectoryLevels) return false;
+
+			const std::size_t block_index = page_offset >> kIndexBitsPerLevel;
+			const std::size_t offset_in_block = page_offset & kBlockMask;
+
+			// If the object never grew tall enough to represent this block index, it
+			// cannot possibly contain a mapping for it.
+			if ((block_index >> (m_block_index_levels * kIndexBitsPerLevel)) != 0) return true;
+
+			std::uintptr_t directory_physical_by_depth[kMaxDirectoryLevels] = {};
+			std::size_t index_in_parent_by_depth[kMaxDirectoryLevels] = {};
+
+			std::uintptr_t current_physical = m_root_directory_physical;
+			RadixPage* current = RadixPageFromPhysical(current_physical);
+			if (!current) return false;
+			directory_physical_by_depth[0] = current_physical;
+			std::size_t depth = 0;
+
+			for (std::size_t level = m_block_index_levels; level > 1; level--) {
+				const std::size_t shift = (level - 1) * kIndexBitsPerLevel;
+				const std::size_t index = (block_index >> shift) & kBlockMask;
+				const std::uintptr_t child_physical = current->entries[index];
+				if (child_physical == 0) return true;
+
+				depth++;
+				if (depth >= kMaxDirectoryLevels) return false;
+				directory_physical_by_depth[depth] = child_physical;
+				index_in_parent_by_depth[depth] = index;
+
+				current_physical = child_physical;
+				current = RadixPageFromPhysical(current_physical);
+				if (!current) return false;
+			}
+
+			const std::size_t leaf_index = block_index & kBlockMask;
+			const std::uintptr_t block_physical = current->entries[leaf_index];
+			if (block_physical == 0) return true;
+			RadixPage* block = RadixPageFromPhysical(block_physical);
+			if (!block) return false;
+
+			const std::uintptr_t frame_physical = block->entries[offset_in_block];
+			if (frame_physical == 0) return true;
+
+			block->entries[offset_in_block] = 0;
+			if (m_payload_frame_count == 0) return false;
+			m_payload_frame_count--;
+
+			if (!pmm->ReleasePhysicalPage(frame_physical)) return false;
+
+			// Reclaim empty metadata pages bottom-up. This keeps the object from
+			// pinning PMM pages for now-empty internal structures.
+			if (RadixPageIsEmpty(block)) {
+				if (!pmm->ReleasePhysicalPage(block_physical)) return false;
+				current->entries[leaf_index] = 0;
+
+				while (depth > 0) {
+					RadixPage* dir = RadixPageFromPhysical(directory_physical_by_depth[depth]);
+					if (!dir) return false;
+					if (!RadixPageIsEmpty(dir)) break;
+					if (!pmm->ReleasePhysicalPage(directory_physical_by_depth[depth])) return false;
+
+					RadixPage* parent = RadixPageFromPhysical(directory_physical_by_depth[depth - 1]);
+					if (!parent) return false;
+					parent->entries[index_in_parent_by_depth[depth]] = 0;
+					depth--;
+				}
+
+				RadixPage* root = RadixPageFromPhysical(m_root_directory_physical);
+				if (!root) return false;
+				if (RadixPageIsEmpty(root)) {
+					if (!pmm->ReleasePhysicalPage(m_root_directory_physical)) return false;
+					m_root_directory_physical = 0;
+					m_block_index_levels = 0;
+				}
+			}
+
+			return true;
+		}
+
+		/**
 		 * @brief Releases all frames owned by this object.
 		 *
 		 * This decrements `ref_count` for each owned frame. Reclamation occurs in
@@ -187,6 +287,14 @@ class AnonymousVmObject final {
 			const std::uintptr_t physmap_virtual =
 				Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(physical_page_base, virtual_address_bits);
 			return reinterpret_cast<RadixPage*>(physmap_virtual);
+		}
+
+		static bool RadixPageIsEmpty(const RadixPage* page) {
+			if (!page) return false;
+			for (std::size_t i = 0; i < 512; i++) {
+				if (page->entries[i] != 0) return false;
+			}
+			return true;
 		}
 
 		static Rocinante::Optional<std::uintptr_t> AllocateAndZeroRadixPage(PhysicalMemoryManager* pmm) {

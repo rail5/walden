@@ -31,6 +31,7 @@ void TestEntry_KernelMappings_IoremapMmio4KiB(TestContext* ctx);
 
 void TestEntry_VMM_VMA_InsertLookup(TestContext* ctx);
 void TestEntry_VMM_AnonymousVmObject_Ownership(TestContext* ctx);
+void TestEntry_VMM_UnmapVma4KiB_ReleasesAnonymousFrames(TestContext* ctx);
 
 void TestEntry_PMM_RespectsReservedKernelAndDTB(TestContext* ctx);
 void TestEntry_PMM_DoesNotClobberReservedDuringBitmapPlacement(TestContext* ctx);
@@ -44,6 +45,7 @@ void TestEntry_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx);
 void TestEntry_PagingHw_UnmappedAccess_FaultsAndReportsBadV(TestContext* ctx);
 void TestEntry_PagingHw_PagingFaultObserver_DispatchesAndCanHandle(TestContext* ctx);
 void TestEntry_PagingHw_PagingFaultObserver_MapsAndRetries(TestContext* ctx);
+void TestEntry_PagingHw_KernelPager_MapsAndRetries(TestContext* ctx);
 void TestEntry_PagingHw_VmmPager_MapsViaVmaAndVmObject(TestContext* ctx);
 void TestEntry_PagingHw_ReadOnlyStore_RaisesPme(TestContext* ctx);
 void TestEntry_PagingHw_NonExecutableFetch_RaisesPnx(TestContext* ctx);
@@ -72,6 +74,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.KernelMappings.IoremapMmio4KiB", &TestEntry_KernelMappings_IoremapMmio4KiB},
 	{"Memory.VMM.VMA.InsertLookup", &TestEntry_VMM_VMA_InsertLookup},
 	{"Memory.VMM.AnonymousVmObject.Ownership", &TestEntry_VMM_AnonymousVmObject_Ownership},
+	{"Memory.VMM.UnmapVma4KiB.ReleasesAnonymousFrames", &TestEntry_VMM_UnmapVma4KiB_ReleasesAnonymousFrames},
 	{"Memory.PMM.RespectsReservedKernelAndDTB", &TestEntry_PMM_RespectsReservedKernelAndDTB},
 	{"Memory.PMM.BitmapPlacement.DoesNotClobberReserved", &TestEntry_PMM_DoesNotClobberReservedDuringBitmapPlacement},
 	{"Memory.PMM.ClampsTrackedRangeToPALEN", &TestEntry_PMM_ClampsTrackedRangeToPALEN},
@@ -83,6 +86,7 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.PagingHw.UnmappedAccess.FaultsAndReportsBadV", &TestEntry_PagingHw_UnmappedAccess_FaultsAndReportsBadV},
 	{"Memory.PagingHw.PagingFaultObserver.DispatchesAndCanHandle", &TestEntry_PagingHw_PagingFaultObserver_DispatchesAndCanHandle},
 	{"Memory.PagingHw.PagingFaultObserver.MapsAndRetries", &TestEntry_PagingHw_PagingFaultObserver_MapsAndRetries},
+	{"Memory.PagingHw.KernelPager.MapsAndRetries", &TestEntry_PagingHw_KernelPager_MapsAndRetries},
 	{"Memory.PagingHw.VmmPager.MapsViaVmaAndVmObject", &TestEntry_PagingHw_VmmPager_MapsViaVmaAndVmObject},
 	{"Memory.PagingHw.ReadOnlyStore.RaisesPME", &TestEntry_PagingHw_ReadOnlyStore_RaisesPme},
 	{"Memory.PagingHw.NonExecutableFetch.RaisesPNX", &TestEntry_PagingHw_NonExecutableFetch_RaisesPnx},

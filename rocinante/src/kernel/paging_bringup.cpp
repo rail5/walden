@@ -255,7 +255,7 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 		//
 		// Policy:
 		// - Unmap the kernel's low identity range from the bootstrap page tables.
-		// - Flush TLB entries (INVTLB op=0).
+		// - Invalidate TLB entries for each unmapped VA (INVTLB op=0x6).
 		// - Log software translations before/after as a sanity check.
 		{
 			const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
@@ -288,14 +288,15 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 				uart.puts("Paging bring-up:   identity teardown skipped (zero kernel size)\n");
 			} else {
 				auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+				const std::uint16_t current_asid = Rocinante::Memory::PagingHw::GetAddressSpaceId();
 				for (std::size_t offset_bytes = 0; offset_bytes < map_size_rounded; offset_bytes += Rocinante::Memory::Paging::kPageSizeBytes) {
 					const std::uintptr_t low_virtual_page_base =
 						kernel_physical_base + static_cast<std::uintptr_t>(offset_bytes);
 					(void)Rocinante::Memory::Paging::UnmapPage4KiB(&pmm, root, low_virtual_page_base, paging_state->address_bits);
+					Rocinante::Memory::PagingHw::InvalidateGlobalOrAsidTlbEntryForVa(current_asid, low_virtual_page_base);
 				}
 
-				uart.puts("Paging bring-up:   INVTLB op=0 (flush all)\n");
-				Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+				uart.puts("Paging bring-up:   INVTLB op=0x6 (per-page invalidate)\n");
 			}
 
 			const auto translated_low_after =
@@ -1317,8 +1318,9 @@ void RunPagingBringup(
 	uart.puts(enable_ptw ? "on" : "off");
 	uart.puts(")\n");
 
-	uart.puts("Paging bring-up: invalidating TLB (INVTLB op=0)\n");
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	uart.puts("Paging bring-up: invalidating TLB (INVTLB op=0x2 + op=0x3)\n");
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 	uart.puts("Paging bring-up: enabling paging (CRMD.PG=1, CRMD.DA=0)\n");
 	Rocinante::Memory::PagingHw::EnablePaging();
 	uart.puts("Paging bring-up: paging enabled\n");

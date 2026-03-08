@@ -24,6 +24,12 @@ namespace AddressSpaceId {
 	static constexpr std::uint64_t kAsidMask = 0x3ff;
 }
 
+static inline std::uint64_t InvtlbAsidOperand(std::uint16_t address_space_id) {
+	// LoongArch-Vol1-EN.html, Section 4.2.4.7 (INVTLB):
+	// rj[9:0] holds ASID and the remaining bits must be 0.
+	return static_cast<std::uint64_t>(address_space_id) & AddressSpaceId::kAsidMask;
+}
+
 namespace CurrentModeInformation {
 	// CRMD.PG (bit 4): enable paging.
 	constexpr std::uint64_t kPagingEnable = (1ull << 4);
@@ -40,7 +46,7 @@ namespace CurrentModeInformation {
 
 	// Spec guidance for software-managed TLB refill when enabling paging.
 	constexpr std::uint64_t kDirectTranslationConsistentCacheable = 0b01;
-}
+} // namespace CurrentModeInformation
 
 static inline std::uint64_t ReadCsr(std::uint32_t csr) {
 	std::uint64_t value;
@@ -65,6 +71,41 @@ void InvalidateAllTlbEntries() {
 	// page-table root, starting from a known-empty TLB reduces the chance of
 	// confusing stale translation state with page-table encoding issues.
 	asm volatile("invtlb 0x0, $r0, $r0" ::: "memory");
+}
+
+void InvalidateGlobalTlbEntries() {
+	// LoongArch-Vol1-EN.html, Section 4.2.4.7 (INVTLB), Table 13:
+	// op=0x2 => "Clears all G=1 page table entries."
+	//
+	// Policy note:
+	// Global (G=1) TLB entries are shared across address spaces (they do not
+	// participate in ASID matching). When we need to invalidate global entries
+	// as part of an address-space operation, we must currently do so
+	// system-wide.
+	asm volatile("invtlb 0x2, $r0, $r0" ::: "memory");
+}
+
+void InvalidateNonGlobalTlbEntries() {
+	// LoongArch-Vol1-EN.html, Section 4.2.4.7 (INVTLB), Table 13:
+	// op=0x3 => "Clears all page table entries with G=0."
+	asm volatile("invtlb 0x3, $r0, $r0" ::: "memory");
+}
+
+void InvalidateNonGlobalTlbEntriesForAsid(std::uint16_t address_space_id) {
+	const std::uint64_t rj_asid = InvtlbAsidOperand(address_space_id);
+	asm volatile("invtlb 0x4, %0, $r0" :: "r"(rj_asid) : "memory");
+}
+
+void InvalidateNonGlobalTlbEntryForAsidAndVa(std::uint16_t address_space_id, std::uintptr_t virtual_address) {
+	const std::uint64_t rj_asid = InvtlbAsidOperand(address_space_id);
+	const std::uintptr_t rk_va = virtual_address;
+	asm volatile("invtlb 0x5, %0, %1" :: "r"(rj_asid), "r"(rk_va) : "memory");
+}
+
+void InvalidateGlobalOrAsidTlbEntryForVa(std::uint16_t address_space_id, std::uintptr_t virtual_address) {
+	const std::uint64_t rj_asid = InvtlbAsidOperand(address_space_id);
+	const std::uintptr_t rk_va = virtual_address;
+	asm volatile("invtlb 0x6, %0, %1" :: "r"(rj_asid), "r"(rk_va) : "memory");
 }
 
 Rocinante::Optional<PageWalkerConfig> Make4KiBPageWalkerConfig(Paging::AddressSpaceBits address_bits) {
@@ -165,6 +206,14 @@ void SetAddressSpaceId(std::uint16_t address_space_id) {
 	WriteCsr(Csr::kAddressSpaceId, updated);
 }
 
+std::uint16_t GetAddressSpaceId() {
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Vol.1 Section 7.5.4 (ASID), Table 38:
+	//   - CSR.ASID.ASID is bits [9:0]
+	const std::uint64_t asid_csr = ReadCsr(Csr::kAddressSpaceId);
+	return static_cast<std::uint16_t>(asid_csr & AddressSpaceId::kAsidMask);
+}
+
 void SetLowHalfRootPageDirectoryBase(const Paging::PageTableRoot& low_half_root) {
 	WriteCsr(Csr::kPgdLow, static_cast<std::uint64_t>(low_half_root.root_physical_address));
 }
@@ -173,8 +222,10 @@ void ActivateLowHalfAddressSpace(const Paging::PageTableRoot& low_half_root, std
 	SetAddressSpaceId(address_space_id);
 	SetLowHalfRootPageDirectoryBase(low_half_root);
 
-	// Coarse policy for early bring-up: avoid stale translations by flushing all.
-	InvalidateAllTlbEntries();
+	// Per-ASID policy:
+	// - When reusing an ASID, clear any stale non-global translations for that ASID.
+	// - Global (G=1) entries remain unaffected.
+	InvalidateNonGlobalTlbEntriesForAsid(address_space_id);
 }
 
 void EnablePaging() {

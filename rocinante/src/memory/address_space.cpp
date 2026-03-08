@@ -64,12 +64,21 @@ bool AddressSpace::DestroyPageTables(PhysicalMemoryManager* physical_memory_mana
 	// Spec anchor (LoongArch-Vol1-EN.html):
 	// - Section 4.2.4.7 (INVTLB): INVTLB maintains consistency between the TLB
 	//   and page table data in memory.
+	//   - Table 13:
+	//     - op=0x2 clears all G=1 (global) entries.
+	//     - op=0x4 clears all G=0 entries matching the supplied ASID.
 	//
 	// Bring-up policy:
-	// - We do not yet have a per-ASID invalidation helper exposed.
 	// - Destroying an address space implies its translations must not be used.
-	// - Use coarse INVTLB op=0 (flush all) before freeing page-table pages.
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	// - Invalidate all non-global entries for this address space's ASID.
+	// - Also invalidate global entries system-wide.
+	//
+	// Explicit flaws:
+	// - Invalidating all global entries is still coarse; the kernel currently
+	//   uses G=1 for some mappings (including in tests), so we cannot avoid it
+	//   here without changing mapping policy.
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntriesForAsid(address_space_id_);
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
 
 	if (!Paging::FreeAllPageTables4KiB(physical_memory_manager, low_half_root_, address_bits_)) {
 		return false;

@@ -64,8 +64,12 @@ public:
 	 *
 	 * Safety requirements:
 	 * - The address space must be inactive; no CPU may continue to use its ASID/root.
-	 * - This uses a coarse TLB invalidation policy (flush-all) as a bring-up
-	 *   safety measure; per-ASID invalidation should replace it once available.
+	 * - This invalidates:
+	 *   - non-global (G=0) entries for this address space's ASID, and
+	 *   - global (G=1) entries system-wide.
+	 *   This is still a bring-up safety measure; it avoids flushing non-global
+	 *   entries for other ASIDs but does not yet provide fine-grained global
+	 *   invalidation.
 	 */
 	bool DestroyPageTables(PhysicalMemoryManager* physical_memory_manager);
 

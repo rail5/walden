@@ -13,6 +13,7 @@
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
 #include <src/memory/paging_hw.h>
+#include <src/memory/kernel_pager.h>
 #include <src/memory/vm_object.h>
 #include <src/memory/vma.h>
 #include <src/memory/vmm_pager.h>
@@ -203,7 +204,8 @@ static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestPagerMapAndRet
 	}
 
 	// Ensure the re-executed instruction observes the updated page tables.
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 
 	g_paging_fault_pager_did_map = true;
 	g_paging_fault_pager_last_mapped_virtual_page_base = kExpectedFaultVirtualAddress;
@@ -485,7 +487,8 @@ static void Test_PagingHw_EnablePaging_TlbRefillSmoke(TestContext* ctx) {
 	const auto config_or = Rocinante::Memory::PagingHw::Make4KiBPageWalkerConfig(address_bits);
 	ROCINANTE_EXPECT_TRUE(ctx, config_or.has_value());
 	Rocinante::Memory::PagingHw::ConfigurePageTableWalker(root.value(), config_or.value());
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 	Rocinante::Memory::PagingHw::EnablePaging();
 
 	// Mapped-mode access: this should trigger TLBR refill (TLB is invalidated)
@@ -707,7 +710,8 @@ static void Test_PagingHw_AddressSpaces_SwitchPgdlChangesTranslation(TestContext
 	// Restore the previous address space/root.
 	asm volatile("csrwr %0, %1" :: "r"(old_asid), "i"(kCsrAsid));
 	asm volatile("csrwr %0, %1" :: "r"(old_pgdl), "i"(kCsrPgdl));
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 }
 
 static void Test_PagingHw_PostPaging_MapUnmap_Faults(TestContext* ctx) {
@@ -787,14 +791,16 @@ static void Test_PagingHw_PostPaging_MapUnmap_Faults(TestContext* ctx) {
 	// entry for the (+2,+3) pair while +3 was unmapped, the cached odd half can
 	// still be invalid. Flushing the TLB forces hardware to observe the updated
 	// page tables on first access.
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 
 	auto* mapped_u64 = reinterpret_cast<volatile std::uint64_t*>(kPostPagingMapUnmapVirtualPageBase);
 	*mapped_u64 = 0x55aa55aa55aa55aaull;
 	ROCINANTE_EXPECT_EQ_U64(ctx, *mapped_u64, 0x55aa55aa55aa55aaull);
 
 	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root, kPostPagingMapUnmapVirtualPageBase, address_bits));
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 
 	ArmExpectedTrap(kExceptionCodePis);
 	const std::uint64_t store_value = 0x0123456789abcdefull;
@@ -935,7 +941,8 @@ static void Test_PagingHw_PagingFaultObserver_DispatchesAndCanHandle(TestContext
 	g_paging_fault_observer_last_pgdh_base = 0;
 
 	Rocinante::Trap::SetPagingFaultObserver(&PagingFaultObserver_TestProbe);
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 
 	// Trigger an unmapped load. The observer handles the fault by skipping the instruction.
 	std::uint64_t tmp = 0;
@@ -1021,7 +1028,8 @@ static void Test_PagingHw_PagingFaultObserver_MapsAndRetries(TestContext* ctx) {
 	g_paging_fault_pager_last_mapped_physical_page_base = 0;
 
 	Rocinante::Trap::SetPagingFaultObserver(&PagingFaultObserver_TestPagerMapAndRetry);
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 
 	// Trigger an unmapped store. The observer handles the fault by mapping the page,
 	// then the store is retried and must succeed.
@@ -1039,6 +1047,68 @@ static void Test_PagingHw_PagingFaultObserver_MapsAndRetries(TestContext* ctx) {
 	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_pager_last_bad_virtual_address, kFaultVirtualAddress);
 	ROCINANTE_EXPECT_EQ_U64(ctx, g_paging_fault_pager_last_mapped_virtual_page_base, kFaultVirtualAddress);
 	ROCINANTE_EXPECT_TRUE(ctx, g_paging_fault_pager_last_mapped_physical_page_base != 0);
+}
+
+static void Test_PagingHw_KernelPager_MapsAndRetries(TestContext* ctx) {
+	// This test runs after paging has been enabled.
+	// It installs the bring-up kernel pager and proves that:
+	// - a page-invalid store within the configured lazy region is repaired by mapping,
+	// - returning Handled retries the instruction and the store succeeds.
+
+	// Sanity check: paging must be enabled (CRMD.PG=1, CRMD.DA=0).
+	static constexpr std::uint32_t kCsrCrmd = 0x0;
+	static constexpr std::uint64_t kCrmdPagingEnable = (1ull << 4);
+	static constexpr std::uint64_t kCrmdDirectAddressingEnable = (1ull << 3);
+	std::uint64_t crmd = 0;
+	asm volatile("csrrd %0, %1" : "=r"(crmd) : "i"(kCsrCrmd));
+	if ((crmd & kCrmdPagingEnable) == 0 || (crmd & kCrmdDirectAddressingEnable) != 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_root_page_table_physical != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_virtual_address_bits != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_physical_address_bits != 0);
+	if (g_paging_hw_root_page_table_physical == 0 || g_paging_hw_virtual_address_bits == 0 || g_paging_hw_physical_address_bits == 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	const Rocinante::Memory::Paging::AddressSpaceBits address_bits{
+		.virtual_address_bits = g_paging_hw_virtual_address_bits,
+		.physical_address_bits = g_paging_hw_physical_address_bits,
+	};
+
+	const Rocinante::Memory::Paging::PageTableRoot root{.root_physical_address = g_paging_hw_root_page_table_physical};
+
+	// Choose a fresh scratch-adjacent page that the suite does not otherwise use.
+	static constexpr std::uintptr_t kFaultVirtualPageBase =
+		kPagingHwScratchVirtualPageBase + (8 * Rocinante::Memory::Paging::kPageSizeBytes);
+	static_assert((kFaultVirtualPageBase % Rocinante::Memory::Paging::kPageSizeBytes) == 0);
+
+	// Prove it is currently unmapped so the store must fault.
+	ROCINANTE_EXPECT_TRUE(ctx, !Rocinante::Memory::Paging::Translate(root, kFaultVirtualPageBase, address_bits).has_value());
+
+	// Configure the region and install the pager.
+	Rocinante::Memory::KernelPager::ConfigureLazyMappingRegion(
+		Rocinante::Memory::KernelPager::LazyMappingRegion{
+			.virtual_base = kFaultVirtualPageBase,
+			.size_bytes = Rocinante::Memory::Paging::kPageSizeBytes,
+		}
+	);
+	Rocinante::Memory::KernelPager::Install();
+
+	// Trigger a page-invalid store. The pager should map the page and the store should be retried.
+	const std::uint64_t store_value = 0x0f1e2d3c4b5a6978ull;
+	asm volatile("st.d %0, %1, 0" :: "r"(store_value), "r"(kFaultVirtualPageBase) : "memory");
+
+	// Always clear the observer so later tests keep their existing behavior.
+	Rocinante::Trap::SetPagingFaultObserver(nullptr);
+	Rocinante::Memory::KernelPager::ConfigureLazyMappingRegion(Rocinante::Memory::KernelPager::LazyMappingRegion{});
+
+	volatile std::uint64_t* const p = reinterpret_cast<volatile std::uint64_t*>(kFaultVirtualPageBase);
+	ROCINANTE_EXPECT_EQ_U64(ctx, *p, store_value);
+	ROCINANTE_EXPECT_TRUE(ctx, Rocinante::Memory::Paging::Translate(root, kFaultVirtualPageBase, address_bits).has_value());
 }
 
 static void Test_PagingHw_VmmPager_MapsViaVmaAndVmObject(TestContext* ctx) {
@@ -1117,7 +1187,8 @@ static void Test_PagingHw_VmmPager_MapsViaVmaAndVmObject(TestContext* ctx) {
 
 	Rocinante::Memory::VmmPager::ConfigureKernelVirtualMemoryAreas(&areas);
 	Rocinante::Trap::SetPagingFaultObserver(&Rocinante::Memory::VmmPager::PagingFaultObserver);
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 
 	// Trigger an unmapped store. The observer maps the page via VMA/object and retries.
 	const std::uint64_t store_value = 0xfeedfacecafebeefull;
@@ -1156,7 +1227,8 @@ static void Test_PagingHw_VmmPager_MapsViaVmaAndVmObject(TestContext* ctx) {
 
 	// Clean up mapping + object-owned pages to avoid leaking PMM pages into later tests.
 	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root, kFaultVirtualPageBase, address_bits));
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 	ROCINANTE_EXPECT_TRUE(ctx, object.ReleaseAllOwnedFrames(&pmm));
 }
 
@@ -1233,7 +1305,8 @@ static void Test_PagingHw_ReadOnlyStore_RaisesPme(TestContext* ctx) {
 		},
 		address_bits));
 
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 
 	// Mapped-mode load must succeed.
 	auto* readonly_u64 = reinterpret_cast<volatile std::uint64_t*>(kReadOnlyVirtualPageBase);
@@ -1431,7 +1504,8 @@ static void Test_PagingHw_NonExecutableFetch_RaisesPnx(TestContext* ctx) {
 		}
 	}
 
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 
 	// Reset observations.
 	g_paging_hw_nx_fault_invocation_count = 0;
@@ -1503,7 +1577,8 @@ nx_resume:
 	if (mapped1) {
 		(void)UnmapPage4KiB(&pmm, root, kNxAliasVirtualPageBase + PhysicalMemoryManager::kPageSizeBytes, address_bits);
 	}
-	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
+	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntries();
 }
 } // namespace
 
@@ -1533,6 +1608,10 @@ void TestEntry_PagingHw_PagingFaultObserver_DispatchesAndCanHandle(TestContext* 
 
 void TestEntry_PagingHw_PagingFaultObserver_MapsAndRetries(TestContext* ctx) {
 	Test_PagingHw_PagingFaultObserver_MapsAndRetries(ctx);
+}
+
+void TestEntry_PagingHw_KernelPager_MapsAndRetries(TestContext* ctx) {
+	Test_PagingHw_KernelPager_MapsAndRetries(ctx);
 }
 
 void TestEntry_PagingHw_VmmPager_MapsViaVmaAndVmObject(TestContext* ctx) {
