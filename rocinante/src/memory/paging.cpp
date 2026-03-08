@@ -330,7 +330,8 @@ static bool FreeAllPageTablesRecursive(
 	PhysicalMemoryManager* pmm,
 	std::uintptr_t table_physical_base,
 	const Layout& layout,
-	std::size_t level
+	std::size_t level,
+	bool* out_had_global_leaf_mappings
 ) {
 	if (!pmm) return false;
 	if (!IsPageAligned(table_physical_base)) return false;
@@ -350,7 +351,7 @@ static bool FreeAllPageTablesRecursive(
 			if ((entry & PteBits::kGlobal) != 0) return false;
 
 			const std::uintptr_t child_physical = EntryPhysicalPageBase(entry, layout.physical_page_base_mask);
-			if (!FreeAllPageTablesRecursive(pmm, child_physical, layout, level - 1)) return false;
+			if (!FreeAllPageTablesRecursive(pmm, child_physical, layout, level - 1, out_had_global_leaf_mappings)) return false;
 			table->entries[i] = 0;
 		}
 	} else {
@@ -359,6 +360,10 @@ static bool FreeAllPageTablesRecursive(
 		for (std::size_t i = 0; i < kEntriesPerTable; i++) {
 			const std::uint64_t entry = table->entries[i];
 			if (!EntryIsPresent(entry)) continue;
+
+			if (out_had_global_leaf_mappings && ((entry & PteBits::kGlobal) != 0)) {
+				*out_had_global_leaf_mappings = true;
+			}
 
 			const std::uintptr_t mapped_physical = EntryPhysicalPageBase(entry, layout.physical_page_base_mask);
 			if (!pmm->DecrementMapCountForPhysical(mapped_physical)) return false;
@@ -389,7 +394,17 @@ bool FreeAllPageTables4KiB(
 	const PageTableRoot& root,
 	AddressSpaceBits address_bits
 ) {
+	return FreeAllPageTables4KiB(pmm, root, address_bits, nullptr);
+}
+
+bool FreeAllPageTables4KiB(
+	PhysicalMemoryManager* pmm,
+	const PageTableRoot& root,
+	AddressSpaceBits address_bits,
+	bool* out_had_global_leaf_mappings
+) {
 	if (!pmm) return false;
+	if (out_had_global_leaf_mappings) *out_had_global_leaf_mappings = false;
 	const auto layout_opt = BuildLayout(address_bits);
 	if (!layout_opt.has_value()) return false;
 	const Layout layout = layout_opt.value();
@@ -403,7 +418,8 @@ bool FreeAllPageTables4KiB(
 		pmm,
 		root.root_physical_address,
 		layout,
-		static_cast<std::size_t>(layout.level_count - 1));
+		static_cast<std::size_t>(layout.level_count - 1),
+		out_had_global_leaf_mappings);
 }
 
 bool MapRange4KiB(

@@ -71,17 +71,20 @@ bool AddressSpace::DestroyPageTables(PhysicalMemoryManager* physical_memory_mana
 	// Bring-up policy:
 	// - Destroying an address space implies its translations must not be used.
 	// - Invalidate all non-global entries for this address space's ASID.
-	// - Also invalidate global entries system-wide.
+	// - Invalidate global entries only if this address space contained any global mappings.
 	//
 	// Explicit flaws:
 	// - Invalidating all global entries is still coarse; the kernel currently
 	//   uses G=1 for some mappings (including in tests), so we cannot avoid it
 	//   here without changing mapping policy.
 	Rocinante::Memory::PagingHw::InvalidateNonGlobalTlbEntriesForAsid(address_space_id_);
-	Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
 
-	if (!Paging::FreeAllPageTables4KiB(physical_memory_manager, low_half_root_, address_bits_)) {
+	bool had_global_leaf_mappings = false;
+	if (!Paging::FreeAllPageTables4KiB(physical_memory_manager, low_half_root_, address_bits_, &had_global_leaf_mappings)) {
 		return false;
+	}
+	if (had_global_leaf_mappings) {
+		Rocinante::Memory::PagingHw::InvalidateGlobalTlbEntries();
 	}
 
 	// Poison the root to make accidental reuse fail loudly.

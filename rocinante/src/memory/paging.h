@@ -229,6 +229,18 @@ bool FreeAllPageTables4KiB(
 );
 
 /**
+ * @brief Frees all page-table pages and optionally reports whether any global (G=1) leaf mappings were present.
+ *
+ * This is useful for deciding whether global TLB invalidation is required when tearing down an address space.
+ */
+bool FreeAllPageTables4KiB(
+	PhysicalMemoryManager* pmm,
+	const PageTableRoot& root,
+	AddressSpaceBits address_bits,
+	bool* out_had_global_leaf_mappings
+);
+
+/**
  * @brief Maps a contiguous range using 4 KiB pages.
  *
  * Requirements:
