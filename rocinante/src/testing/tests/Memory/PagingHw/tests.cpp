@@ -13,6 +13,9 @@
 #include <src/memory/pmm.h>
 #include <src/memory/paging.h>
 #include <src/memory/paging_hw.h>
+#include <src/memory/vm_object.h>
+#include <src/memory/vma.h>
+#include <src/memory/vmm_pager.h>
 #include <src/memory/virtual_layout.h>
 
 #include <cstddef>
@@ -1038,6 +1041,125 @@ static void Test_PagingHw_PagingFaultObserver_MapsAndRetries(TestContext* ctx) {
 	ROCINANTE_EXPECT_TRUE(ctx, g_paging_fault_pager_last_mapped_physical_page_base != 0);
 }
 
+static void Test_PagingHw_VmmPager_MapsViaVmaAndVmObject(TestContext* ctx) {
+	// This test runs after paging has been enabled.
+	// It installs the VMM pager observer and proves that:
+	// - a page fault is repaired by looking up a VMA,
+	// - backing comes from an AnonymousVmObject,
+	// - a retried instruction can complete successfully.
+
+	using Rocinante::Memory::AnonymousVmObject;
+	using Rocinante::Memory::PhysicalMemoryManager;
+	using Rocinante::Memory::VirtualMemoryArea;
+	using Rocinante::Memory::VirtualMemoryAreaSet;
+	using Rocinante::Memory::Paging::AccessPermissions;
+	using Rocinante::Memory::Paging::AddressSpaceBits;
+	using Rocinante::Memory::Paging::CacheMode;
+	using Rocinante::Memory::Paging::ExecutePermissions;
+	using Rocinante::Memory::Paging::PagePermissions;
+	using Rocinante::Memory::Paging::PageTableRoot;
+	using Rocinante::Memory::Paging::Translate;
+	using Rocinante::Memory::Paging::UnmapPage4KiB;
+
+	// Sanity check: paging must be enabled (CRMD.PG=1, CRMD.DA=0).
+	static constexpr std::uint32_t kCsrCrmd = 0x0;
+	static constexpr std::uint64_t kCrmdPagingEnable = (1ull << 4);
+	static constexpr std::uint64_t kCrmdDirectAddressingEnable = (1ull << 3);
+	std::uint64_t crmd = 0;
+	asm volatile("csrrd %0, %1" : "=r"(crmd) : "i"(kCsrCrmd));
+	if ((crmd & kCrmdPagingEnable) == 0 || (crmd & kCrmdDirectAddressingEnable) != 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_root_page_table_physical != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_virtual_address_bits != 0);
+	ROCINANTE_EXPECT_TRUE(ctx, g_paging_hw_physical_address_bits != 0);
+	if (g_paging_hw_root_page_table_physical == 0 || g_paging_hw_virtual_address_bits == 0 || g_paging_hw_physical_address_bits == 0) {
+		ROCINANTE_EXPECT_TRUE(ctx, false);
+		return;
+	}
+
+	const AddressSpaceBits address_bits{
+		.virtual_address_bits = g_paging_hw_virtual_address_bits,
+		.physical_address_bits = g_paging_hw_physical_address_bits,
+	};
+
+	const PageTableRoot root{.root_physical_address = g_paging_hw_root_page_table_physical};
+	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
+
+	// Choose a scratch-adjacent page not otherwise used by the suite.
+	static constexpr std::uintptr_t kFaultVirtualPageBase =
+		kPagingHwScratchVirtualPageBase + (5 * PhysicalMemoryManager::kPageSizeBytes);
+	static_assert((kFaultVirtualPageBase % PhysicalMemoryManager::kPageSizeBytes) == 0);
+
+	// Prove it is currently unmapped.
+	ROCINANTE_EXPECT_TRUE(ctx, !Translate(root, kFaultVirtualPageBase, address_bits).has_value());
+
+	AnonymousVmObject object;
+	VirtualMemoryAreaSet areas;
+
+	static constexpr PagePermissions kPermissions{
+		.access = AccessPermissions::ReadWrite,
+		.execute = ExecutePermissions::NoExecute,
+		.cache = CacheMode::CoherentCached,
+		.global = true,
+	};
+
+	VirtualMemoryArea vma;
+	vma.virtual_base = kFaultVirtualPageBase;
+	vma.virtual_limit = kFaultVirtualPageBase + PhysicalMemoryManager::kPageSizeBytes;
+	vma.permissions = kPermissions;
+	vma.backing_type = VirtualMemoryArea::BackingType::Anonymous;
+	vma.anonymous_object = &object;
+	vma.owns_frames = true;
+	ROCINANTE_EXPECT_TRUE(ctx, areas.Insert(&vma));
+
+	Rocinante::Memory::VmmPager::ConfigureKernelVirtualMemoryAreas(&areas);
+	Rocinante::Trap::SetPagingFaultObserver(&Rocinante::Memory::VmmPager::PagingFaultObserver);
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+
+	// Trigger an unmapped store. The observer maps the page via VMA/object and retries.
+	const std::uint64_t store_value = 0xfeedfacecafebeefull;
+	asm volatile("st.d %0, %1, 0" :: "r"(store_value), "r"(kFaultVirtualPageBase) : "memory");
+
+	// Always clear the observer and global config so later tests keep their behavior.
+	Rocinante::Trap::SetPagingFaultObserver(nullptr);
+	Rocinante::Memory::VmmPager::ConfigureKernelVirtualMemoryAreas(nullptr);
+
+	volatile std::uint64_t* const p = reinterpret_cast<volatile std::uint64_t*>(kFaultVirtualPageBase);
+	ROCINANTE_EXPECT_EQ_U64(ctx, *p, store_value);
+
+	const auto physical_or = Translate(root, kFaultVirtualPageBase, address_bits);
+	ROCINANTE_EXPECT_TRUE(ctx, physical_or.has_value());
+	if (!physical_or.has_value()) return;
+	const std::uintptr_t physical_page_base =
+		static_cast<std::uintptr_t>(physical_or.value()) & ~(PhysicalMemoryManager::kPageSizeBytes - 1);
+
+	// The leaf mapping must be tracked via map_count.
+	{
+		const auto map_count = pmm.MapCountForPhysical(physical_page_base);
+		ROCINANTE_EXPECT_TRUE(ctx, map_count.has_value());
+		if (map_count.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, map_count.value(), 1);
+		}
+	}
+
+	// The object owns the frame via ref_count (AllocatePage returns ref_count==1).
+	{
+		const auto ref_count = pmm.ReferenceCountForPhysical(physical_page_base);
+		ROCINANTE_EXPECT_TRUE(ctx, ref_count.has_value());
+		if (ref_count.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, ref_count.value(), 1);
+		}
+	}
+
+	// Clean up mapping + object-owned pages to avoid leaking PMM pages into later tests.
+	ROCINANTE_EXPECT_TRUE(ctx, UnmapPage4KiB(&pmm, root, kFaultVirtualPageBase, address_bits));
+	Rocinante::Memory::PagingHw::InvalidateAllTlbEntries();
+	ROCINANTE_EXPECT_TRUE(ctx, object.ReleaseAllOwnedFrames(&pmm));
+}
+
 static void Test_PagingHw_ReadOnlyStore_RaisesPme(TestContext* ctx) {
 	// This test runs after paging has been enabled.
 	// It maps a page with D=0 (no-dirty / no-write) and asserts that a store
@@ -1411,6 +1533,10 @@ void TestEntry_PagingHw_PagingFaultObserver_DispatchesAndCanHandle(TestContext* 
 
 void TestEntry_PagingHw_PagingFaultObserver_MapsAndRetries(TestContext* ctx) {
 	Test_PagingHw_PagingFaultObserver_MapsAndRetries(ctx);
+}
+
+void TestEntry_PagingHw_VmmPager_MapsViaVmaAndVmObject(TestContext* ctx) {
+	Test_PagingHw_VmmPager_MapsViaVmaAndVmObject(ctx);
 }
 
 void TestEntry_PagingHw_ReadOnlyStore_RaisesPme(TestContext* ctx) {

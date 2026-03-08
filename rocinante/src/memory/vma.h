@@ -14,6 +14,7 @@
 namespace Rocinante::Memory {
 
 class VirtualMemoryAreaSet;
+class AnonymousVmObject;
 
 /**
  * @brief A minimal virtual memory area (VMA) record.
@@ -31,6 +32,14 @@ struct VirtualMemoryArea final {
 	std::uintptr_t virtual_limit = 0;
 	Paging::PagePermissions permissions{};
 	BackingType backing_type = BackingType::Anonymous;
+	// Backing object for anonymous mappings.
+	//
+	// Bring-up notes / flaws:
+	// - This is currently optional so that a VMA can represent a reserved range
+	//   before policy decides whether it should be demand-mapped.
+	// - The VMM pager (Phase 4.3) requires this to be non-null to handle anonymous
+	//   page faults.
+	AnonymousVmObject* anonymous_object = nullptr;
 	bool owns_frames = false;
 
 	bool IsValid() const {

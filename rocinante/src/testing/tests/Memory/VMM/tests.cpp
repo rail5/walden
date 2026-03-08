@@ -5,6 +5,9 @@
 
 #include <src/testing/test.h>
 
+#include <src/memory/boot_memory_map.h>
+#include <src/memory/pmm.h>
+#include <src/memory/vm_object.h>
 #include <src/memory/vma.h>
 
 namespace Rocinante::Testing {
@@ -130,10 +133,121 @@ static void Test_VMM_VMA_InsertLookup(TestContext* ctx) {
 	}
 }
 
+static void Test_VMM_AnonymousVmObject_Ownership(TestContext* ctx) {
+	using Rocinante::Memory::AnonymousVmObject;
+	using Rocinante::Memory::BootMemoryMap;
+	using Rocinante::Memory::BootMemoryRegion;
+	using Rocinante::Memory::GetPhysicalMemoryManager;
+	using Rocinante::Memory::PhysicalMemoryManager;
+
+	static constexpr std::uintptr_t kUsableBase = 0x00100000;
+	static constexpr std::size_t kUsablePages = 128;
+	static constexpr std::size_t kUsableSizeBytes = kUsablePages * PhysicalMemoryManager::kPageSizeBytes;
+
+	// Keep kernel and DTB out of the tracked span so this test focuses on
+	// AnonymousVmObject ownership behavior.
+	static constexpr std::uintptr_t kKernelBase = 0x00400000;
+	static constexpr std::uintptr_t kKernelEnd = 0x00401000;
+	static constexpr std::uintptr_t kDeviceTreeBase = 0x00500000;
+	static constexpr std::size_t kDeviceTreeSizeBytes = PhysicalMemoryManager::kPageSizeBytes;
+
+	BootMemoryMap map;
+	map.Clear();
+	ROCINANTE_EXPECT_TRUE(ctx, map.AddRegion(BootMemoryRegion{.physical_base = kUsableBase, .size_bytes = kUsableSizeBytes, .type = BootMemoryRegion::Type::UsableRAM}));
+
+	auto& pmm = GetPhysicalMemoryManager();
+	ROCINANTE_EXPECT_TRUE(ctx, pmm.InitializeFromBootMemoryMap(map, kKernelBase, kKernelEnd, kDeviceTreeBase, kDeviceTreeSizeBytes));
+
+	AnonymousVmObject object;
+	ROCINANTE_EXPECT_TRUE(ctx, object.IsEmpty());
+
+	const std::size_t free_before = pmm.FreePages();
+
+	const auto page0_first = object.GetOrCreateFrameForPageOffset(&pmm, 0);
+	ROCINANTE_EXPECT_TRUE(ctx, page0_first.has_value());
+	if (!page0_first.has_value()) return;
+	ROCINANTE_EXPECT_TRUE(ctx, page0_first.value().created);
+	const std::uintptr_t pa0 = page0_first.value().physical_page_base;
+
+	// Storage policy note:
+	// AnonymousVmObject allocates metadata pages (radix directory + one block page)
+	// on first use, in addition to the payload frame itself.
+	// Therefore, the first GetOrCreate consumes 3 PMM pages total.
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before - 3);
+	{
+		const auto ref = pmm.ReferenceCountForPhysical(pa0);
+		ROCINANTE_EXPECT_TRUE(ctx, ref.has_value());
+		if (ref.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, ref.value(), 1);
+		}
+	}
+
+	// Second access to the same page offset returns the same frame without a new allocation.
+	const auto page0_second = object.GetOrCreateFrameForPageOffset(&pmm, 0);
+	ROCINANTE_EXPECT_TRUE(ctx, page0_second.has_value());
+	if (!page0_second.has_value()) return;
+	ROCINANTE_EXPECT_TRUE(ctx, !page0_second.value().created);
+	ROCINANTE_EXPECT_EQ_U64(ctx, page0_second.value().physical_page_base, pa0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before - 3);
+
+	// A different page offset creates a different owned frame.
+	const auto page1_first = object.GetOrCreateFrameForPageOffset(&pmm, 1);
+	ROCINANTE_EXPECT_TRUE(ctx, page1_first.has_value());
+	if (!page1_first.has_value()) return;
+	ROCINANTE_EXPECT_TRUE(ctx, page1_first.value().created);
+	const std::uintptr_t pa1 = page1_first.value().physical_page_base;
+	ROCINANTE_EXPECT_TRUE(ctx, pa1 != pa0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before - 4);
+
+	// Force the radix directory to grow beyond a single-level directory by
+	// accessing a page offset whose block index exceeds 512.
+	//
+	// page_offset = (513 blocks * 512 pages/block) + 0 pages.
+	static constexpr std::size_t kPagesPerBlock = 512;
+	static constexpr std::size_t kFarBlockIndex = 513;
+	static constexpr std::size_t kFarOffset = kFarBlockIndex * kPagesPerBlock;
+	const auto far_first = object.GetOrCreateFrameForPageOffset(&pmm, kFarOffset);
+	ROCINANTE_EXPECT_TRUE(ctx, far_first.has_value());
+	if (!far_first.has_value()) return;
+	ROCINANTE_EXPECT_TRUE(ctx, far_first.value().created);
+	const std::uintptr_t pa_far = far_first.value().physical_page_base;
+	ROCINANTE_EXPECT_TRUE(ctx, pa_far != pa0);
+	ROCINANTE_EXPECT_TRUE(ctx, pa_far != pa1);
+
+	// Directory growth consumes 3 more metadata pages (new root + one child directory + new block)
+	// plus the payload frame.
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before - 8);
+
+	ROCINANTE_EXPECT_TRUE(ctx, object.ReleaseAllOwnedFrames(&pmm));
+	ROCINANTE_EXPECT_TRUE(ctx, object.IsEmpty());
+	ROCINANTE_EXPECT_EQ_U64(ctx, pmm.FreePages(), free_before);
+	{
+		const auto ref0 = pmm.ReferenceCountForPhysical(pa0);
+		const auto ref1 = pmm.ReferenceCountForPhysical(pa1);
+		const auto ref_far = pmm.ReferenceCountForPhysical(pa_far);
+		ROCINANTE_EXPECT_TRUE(ctx, ref0.has_value());
+		ROCINANTE_EXPECT_TRUE(ctx, ref1.has_value());
+		ROCINANTE_EXPECT_TRUE(ctx, ref_far.has_value());
+		if (ref0.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, ref0.value(), 0);
+		}
+		if (ref1.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, ref1.value(), 0);
+		}
+		if (ref_far.has_value()) {
+			ROCINANTE_EXPECT_EQ_U64(ctx, ref_far.value(), 0);
+		}
+	}
+}
+
 } // namespace
 
 void TestEntry_VMM_VMA_InsertLookup(TestContext* ctx) {
 	Test_VMM_VMA_InsertLookup(ctx);
+}
+
+void TestEntry_VMM_AnonymousVmObject_Ownership(TestContext* ctx) {
+	Test_VMM_AnonymousVmObject_Ownership(ctx);
 }
 
 } // namespace Rocinante::Testing
