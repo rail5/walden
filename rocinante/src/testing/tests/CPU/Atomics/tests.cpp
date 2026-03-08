@@ -145,6 +145,31 @@ static void Test_Atomics_CompareExchangeU64Db_BasicSemantics(TestContext* ctx) {
 	}
 }
 
+static void Test_Atomics_LoadStoreWrappers_BasicSemantics(TestContext* ctx) {
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Section 2.2.7.6: LL.ACQ/SC.REL gives read-acquire / write-release
+	//   semantics for the RMW primitive that backs AtomicLoadU64AcqRel.
+	// - Section 2.2.7.1: AMSWAP_DB.D provides an atomic exchange with a data
+	//   barrier, which backs AtomicStoreU64Db.
+	// - Section 2.2.8.1: DBAR 0 is a full load/store barrier, used by the
+	//   stronger fallback paths.
+	alignas(8) volatile std::uint64_t value = 55;
+
+	const std::uint64_t loaded0 = Rocinante::AtomicLoadU64AcqRel(&value);
+	ROCINANTE_EXPECT_EQ_U64(ctx, loaded0, 55);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 55);
+
+	Rocinante::AtomicStoreU64Db(&value, 77);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 77);
+
+	const std::uint64_t loaded1 = Rocinante::AtomicLoadU64AcqRel(&value);
+	ROCINANTE_EXPECT_EQ_U64(ctx, loaded1, 77);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 77);
+	Rocinante::AtomicStoreU64Db(&value, 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, Rocinante::AtomicLoadU64AcqRel(&value), 0);
+}
+
 } // namespace
 
 void TestEntry_Atomics_FetchAddU64Db_BasicSemantics(TestContext* ctx) {
@@ -161,6 +186,10 @@ void TestEntry_Atomics_ExchangeU64Db_BasicSemantics(TestContext* ctx) {
 
 void TestEntry_Atomics_CompareExchangeU64Db_BasicSemantics(TestContext* ctx) {
 	Test_Atomics_CompareExchangeU64Db_BasicSemantics(ctx);
+}
+
+void TestEntry_Atomics_LoadStoreWrappers_BasicSemantics(TestContext* ctx) {
+	Test_Atomics_LoadStoreWrappers_BasicSemantics(ctx);
 }
 
 } // namespace Rocinante::Testing

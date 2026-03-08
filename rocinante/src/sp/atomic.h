@@ -227,6 +227,23 @@ static inline std::uint64_t AtomicFetchAddU64AcqRel(volatile std::uint64_t* addr
 	return Rocinante::AtomicFetchAddU64Db(address, addend);
 }
 
+// AtomicLoadU64AcqRel performs an atomic 64-bit load with acquire semantics.
+//
+// LoongArch does not provide a standalone architected load-acquire instruction
+// in the base ISA sections we currently rely on. For now we implement this via
+// an atomic fetch-add of zero using the acquire/release helper above.
+//
+// Explicit flaw:
+// - This is stronger and more expensive than a dedicated load would be.
+// - The semantics are still spec-backed because AtomicFetchAddU64AcqRel is
+//   implemented using LL.ACQ/SC.REL when available, or a stronger full-barrier
+//   atomic helper otherwise.
+static inline std::uint64_t AtomicLoadU64AcqRel(const volatile std::uint64_t* address) {
+	return Rocinante::AtomicFetchAddU64AcqRel(
+		const_cast<volatile std::uint64_t*>(address),
+		0);
+}
+
 // AtomicExchangeU64Db performs an atomic exchange on a 64-bit value with a
 // full load/store barrier.
 static inline std::uint64_t AtomicExchangeU64Db(volatile std::uint64_t* address, std::uint64_t desired) {
@@ -235,6 +252,21 @@ static inline std::uint64_t AtomicExchangeU64Db(volatile std::uint64_t* address,
 	}
 
 	return Rocinante::Detail::AtomicExchangeU64DbViaLlSc(address, desired);
+}
+
+// AtomicStoreU64Db performs an atomic 64-bit store with full load/store
+// barrier semantics.
+//
+// LoongArch does not provide a standalone architected "store with DB" helper
+// in the ISA sections we currently depend on. For now we implement this by
+// performing an atomic exchange and discarding the old value.
+//
+// Explicit flaw:
+// - This is stronger and more expensive than a dedicated store would be.
+// - The semantics are still spec-backed because AtomicExchangeU64Db is backed
+//   by AMSWAP_DB.D or an LL/SC + DBAR 0 fallback.
+static inline void AtomicStoreU64Db(volatile std::uint64_t* address, std::uint64_t value) {
+	(void)Rocinante::AtomicExchangeU64Db(address, value);
 }
 
 // AtomicCompareExchangeU64Db atomically compares *address with *expected.

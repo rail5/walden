@@ -14,6 +14,7 @@ void TestEntry_Atomics_FetchAddU64Db_BasicSemantics(TestContext* ctx);
 void TestEntry_Atomics_FetchAddU64AcqRel_BasicSemantics(TestContext* ctx);
 void TestEntry_Atomics_ExchangeU64Db_BasicSemantics(TestContext* ctx);
 void TestEntry_Atomics_CompareExchangeU64Db_BasicSemantics(TestContext* ctx);
+void TestEntry_Atomics_LoadStoreWrappers_BasicSemantics(TestContext* ctx);
 void TestEntry_Traps_BREAK_EntersAndReturns(TestContext* ctx);
 void TestEntry_Traps_INE_UndefinedInstruction_IsObserved(TestContext* ctx);
 void TestEntry_Interrupts_TimerIRQ_DeliversAndClears(TestContext* ctx);
@@ -33,6 +34,8 @@ void TestEntry_KernelMappings_MapNewRange4KiB(TestContext* ctx);
 void TestEntry_KernelMappings_MapNewRange4KiB_ReclaimsBackingPages(TestContext* ctx);
 void TestEntry_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx);
 void TestEntry_KernelMappings_IoremapMmio4KiB(TestContext* ctx);
+void TestEntry_TlbShootdown_CpuMask_BasicSemantics(TestContext* ctx);
+void TestEntry_TlbShootdown_State_GenerationAck_BasicSemantics(TestContext* ctx);
 
 void TestEntry_VMM_VMA_InsertLookup(TestContext* ctx);
 void TestEntry_VMM_AnonymousVmObject_Ownership(TestContext* ctx);
@@ -66,6 +69,7 @@ extern const TestCase g_test_cases[] = {
 	{"CPU.Atomics.FetchAddU64AcqRel.BasicSemantics", &TestEntry_Atomics_FetchAddU64AcqRel_BasicSemantics},
 	{"CPU.Atomics.ExchangeU64Db.BasicSemantics", &TestEntry_Atomics_ExchangeU64Db_BasicSemantics},
 	{"CPU.Atomics.CompareExchangeU64Db.BasicSemantics", &TestEntry_Atomics_CompareExchangeU64Db_BasicSemantics},
+	{"CPU.Atomics.LoadStoreWrappers.BasicSemantics", &TestEntry_Atomics_LoadStoreWrappers_BasicSemantics},
 	{"Traps.BREAK.EntersAndReturns", &TestEntry_Traps_BREAK_EntersAndReturns},
 	{"Traps.INE.UndefinedInstruction.IsObserved", &TestEntry_Traps_INE_UndefinedInstruction_IsObserved},
 	{"Interrupts.TimerIRQ.DeliversAndClears", &TestEntry_Interrupts_TimerIRQ_DeliversAndClears},
@@ -82,6 +86,8 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.KernelMappings.MapNewRange4KiB.ReclaimsBackingPages", &TestEntry_KernelMappings_MapNewRange4KiB_ReclaimsBackingPages},
 	{"Memory.KernelMappings.MapNewGuardedRange4KiB", &TestEntry_KernelMappings_MapNewGuardedRange4KiB},
 	{"Memory.KernelMappings.IoremapMmio4KiB", &TestEntry_KernelMappings_IoremapMmio4KiB},
+	{"Memory.TlbShootdown.CpuMask.BasicSemantics", &TestEntry_TlbShootdown_CpuMask_BasicSemantics},
+	{"Memory.TlbShootdown.State.GenerationAck.BasicSemantics", &TestEntry_TlbShootdown_State_GenerationAck_BasicSemantics},
 	{"Memory.VMM.VMA.InsertLookup", &TestEntry_VMM_VMA_InsertLookup},
 	{"Memory.VMM.AnonymousVmObject.Ownership", &TestEntry_VMM_AnonymousVmObject_Ownership},
 	{"Memory.VMM.UnmapVma4KiB.ReleasesAnonymousFrames", &TestEntry_VMM_UnmapVma4KiB_ReleasesAnonymousFrames},
