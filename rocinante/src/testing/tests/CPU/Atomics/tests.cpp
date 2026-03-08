@@ -66,10 +66,101 @@ static void Test_Atomics_FetchAddU64Db_BasicSemantics(TestContext* ctx) {
 	}
 }
 
+static void Test_Atomics_FetchAddU64AcqRel_BasicSemantics(TestContext* ctx) {
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Section 2.2.7.6: LL.ACQ has read-acquire semantics; SC.REL has
+	//   write-release semantics; used as an atomic RMW pair.
+	alignas(8) volatile std::uint64_t value = 7;
+
+	const std::uint64_t old0 = Rocinante::AtomicFetchAddU64AcqRel(&value, 3);
+	ROCINANTE_EXPECT_EQ_U64(ctx, old0, 7);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 10);
+
+	const std::uint64_t old1 = Rocinante::AtomicFetchAddU64AcqRel(&value, 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, old1, 10);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 10);
+
+	if (Rocinante::GetCPUCFG().SupportsLLACQSCREL()) {
+		Rocinante::Testing::Note(ctx, __FILE__, __LINE__, "Testing LL.ACQ/SC.REL helper path");
+
+		alignas(8) volatile std::uint64_t llacq_value = 1000;
+		const std::uint64_t old2 = Rocinante::Detail::AtomicFetchAddU64AcqRelViaLlAcqScRel(&llacq_value, 24);
+		ROCINANTE_EXPECT_EQ_U64(ctx, old2, 1000);
+		ROCINANTE_EXPECT_EQ_U64(ctx, llacq_value, 1024);
+	}
+}
+
+static void Test_Atomics_ExchangeU64Db_BasicSemantics(TestContext* ctx) {
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Section 2.2.7.1: AMSWAP[.DB].D atomically swaps memory with a register.
+	// - Section 2.2.7.4: LL/SC pair can implement atomic RMW via retry loop.
+	alignas(8) volatile std::uint64_t value = 11;
+
+	const std::uint64_t old0 = Rocinante::AtomicExchangeU64Db(&value, 99);
+	ROCINANTE_EXPECT_EQ_U64(ctx, old0, 11);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 99);
+
+	const std::uint64_t old1 = Rocinante::AtomicExchangeU64Db(&value, 0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, old1, 99);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 0);
+
+	if (Rocinante::GetCPUCFG().SupportsAMAtomicMemoryAccess()) {
+		Rocinante::Testing::Note(ctx, __FILE__, __LINE__, "Testing LL/SC exchange helper path");
+
+		alignas(8) volatile std::uint64_t llsc_value = 100;
+		const std::uint64_t old2 = Rocinante::Detail::AtomicExchangeU64DbViaLlSc(&llsc_value, 1234);
+		ROCINANTE_EXPECT_EQ_U64(ctx, old2, 100);
+		ROCINANTE_EXPECT_EQ_U64(ctx, llsc_value, 1234);
+	}
+}
+
+static void Test_Atomics_CompareExchangeU64Db_BasicSemantics(TestContext* ctx) {
+	// Spec anchor (LoongArch-Vol1-EN.html):
+	// - Section 2.2.7.3: AMCAS compares old memory value against expected and
+	//   conditionally writes new value; rd receives old value.
+	// - Section 2.2.7.4: LL/SC pair can implement the same semantics via retry loop.
+	alignas(8) volatile std::uint64_t value = 5;
+
+	std::uint64_t expected0 = 5;
+	const bool ok0 = Rocinante::AtomicCompareExchangeU64Db(&value, &expected0, 9);
+	ROCINANTE_EXPECT_TRUE(ctx, ok0);
+	ROCINANTE_EXPECT_EQ_U64(ctx, expected0, 5);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 9);
+
+	std::uint64_t expected1 = 5;
+	const bool ok1 = Rocinante::AtomicCompareExchangeU64Db(&value, &expected1, 77);
+	ROCINANTE_EXPECT_TRUE(ctx, !ok1);
+	ROCINANTE_EXPECT_EQ_U64(ctx, expected1, 9);
+	ROCINANTE_EXPECT_EQ_U64(ctx, value, 9);
+
+	if (Rocinante::GetCPUCFG().SupportsLAMCAS()) {
+		Rocinante::Testing::Note(ctx, __FILE__, __LINE__, "Testing LL/SC compare-exchange helper path");
+
+		alignas(8) volatile std::uint64_t llsc_value = 123;
+		std::uint64_t expected2 = 123;
+		const bool ok2 = Rocinante::Detail::AtomicCompareExchangeU64DbViaLlSc(&llsc_value, &expected2, 321);
+		ROCINANTE_EXPECT_TRUE(ctx, ok2);
+		ROCINANTE_EXPECT_EQ_U64(ctx, expected2, 123);
+		ROCINANTE_EXPECT_EQ_U64(ctx, llsc_value, 321);
+	}
+}
+
 } // namespace
 
 void TestEntry_Atomics_FetchAddU64Db_BasicSemantics(TestContext* ctx) {
 	Test_Atomics_FetchAddU64Db_BasicSemantics(ctx);
+}
+
+void TestEntry_Atomics_FetchAddU64AcqRel_BasicSemantics(TestContext* ctx) {
+	Test_Atomics_FetchAddU64AcqRel_BasicSemantics(ctx);
+}
+
+void TestEntry_Atomics_ExchangeU64Db_BasicSemantics(TestContext* ctx) {
+	Test_Atomics_ExchangeU64Db_BasicSemantics(ctx);
+}
+
+void TestEntry_Atomics_CompareExchangeU64Db_BasicSemantics(TestContext* ctx) {
+	Test_Atomics_CompareExchangeU64Db_BasicSemantics(ctx);
 }
 
 } // namespace Rocinante::Testing

@@ -11,6 +11,9 @@ void TestEntry_CPUCFG_FakeBackend_DecodesWord1(TestContext* ctx);
 void TestEntry_CPUCFG_FakeBackend_CachesWords(TestContext* ctx);
 void TestEntry_CPUID_CoreId_IsReadableAndStable(TestContext* ctx);
 void TestEntry_Atomics_FetchAddU64Db_BasicSemantics(TestContext* ctx);
+void TestEntry_Atomics_FetchAddU64AcqRel_BasicSemantics(TestContext* ctx);
+void TestEntry_Atomics_ExchangeU64Db_BasicSemantics(TestContext* ctx);
+void TestEntry_Atomics_CompareExchangeU64Db_BasicSemantics(TestContext* ctx);
 void TestEntry_Traps_BREAK_EntersAndReturns(TestContext* ctx);
 void TestEntry_Traps_INE_UndefinedInstruction_IsObserved(TestContext* ctx);
 void TestEntry_Interrupts_TimerIRQ_DeliversAndClears(TestContext* ctx);
@@ -60,6 +63,9 @@ extern const TestCase g_test_cases[] = {
 	{"CPUCFG.FakeBackend.CachesWords", &TestEntry_CPUCFG_FakeBackend_CachesWords},
 	{"CPU.CPUID.CoreId.IsReadableAndStable", &TestEntry_CPUID_CoreId_IsReadableAndStable},
 	{"CPU.Atomics.FetchAddU64Db.BasicSemantics", &TestEntry_Atomics_FetchAddU64Db_BasicSemantics},
+	{"CPU.Atomics.FetchAddU64AcqRel.BasicSemantics", &TestEntry_Atomics_FetchAddU64AcqRel_BasicSemantics},
+	{"CPU.Atomics.ExchangeU64Db.BasicSemantics", &TestEntry_Atomics_ExchangeU64Db_BasicSemantics},
+	{"CPU.Atomics.CompareExchangeU64Db.BasicSemantics", &TestEntry_Atomics_CompareExchangeU64Db_BasicSemantics},
 	{"Traps.BREAK.EntersAndReturns", &TestEntry_Traps_BREAK_EntersAndReturns},
 	{"Traps.INE.UndefinedInstruction.IsObserved", &TestEntry_Traps_INE_UndefinedInstruction_IsObserved},
 	{"Interrupts.TimerIRQ.DeliversAndClears", &TestEntry_Interrupts_TimerIRQ_DeliversAndClears},
