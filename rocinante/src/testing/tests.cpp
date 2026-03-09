@@ -36,6 +36,9 @@ void TestEntry_KernelMappings_MapNewGuardedRange4KiB(TestContext* ctx);
 void TestEntry_KernelMappings_IoremapMmio4KiB(TestContext* ctx);
 void TestEntry_TlbShootdown_CpuMask_BasicSemantics(TestContext* ctx);
 void TestEntry_TlbShootdown_State_GenerationAck_BasicSemantics(TestContext* ctx);
+void TestEntry_TlbShootdown_State_RequestMailbox_BasicSemantics(TestContext* ctx);
+void TestEntry_TlbShootdown_State_RequestHelpers_BasicSemantics(TestContext* ctx);
+void TestEntry_TlbShootdown_State_MaskSampling_BasicSemantics(TestContext* ctx);
 
 void TestEntry_VMM_VMA_InsertLookup(TestContext* ctx);
 void TestEntry_VMM_AnonymousVmObject_Ownership(TestContext* ctx);
@@ -88,6 +91,9 @@ extern const TestCase g_test_cases[] = {
 	{"Memory.KernelMappings.IoremapMmio4KiB", &TestEntry_KernelMappings_IoremapMmio4KiB},
 	{"Memory.TlbShootdown.CpuMask.BasicSemantics", &TestEntry_TlbShootdown_CpuMask_BasicSemantics},
 	{"Memory.TlbShootdown.State.GenerationAck.BasicSemantics", &TestEntry_TlbShootdown_State_GenerationAck_BasicSemantics},
+	{"Memory.TlbShootdown.State.RequestMailbox.BasicSemantics", &TestEntry_TlbShootdown_State_RequestMailbox_BasicSemantics},
+	{"Memory.TlbShootdown.State.RequestHelpers.BasicSemantics", &TestEntry_TlbShootdown_State_RequestHelpers_BasicSemantics},
+	{"Memory.TlbShootdown.State.MaskSampling.BasicSemantics", &TestEntry_TlbShootdown_State_MaskSampling_BasicSemantics},
 	{"Memory.VMM.VMA.InsertLookup", &TestEntry_VMM_VMA_InsertLookup},
 	{"Memory.VMM.AnonymousVmObject.Ownership", &TestEntry_VMM_AnonymousVmObject_Ownership},
 	{"Memory.VMM.UnmapVma4KiB.ReleasesAnonymousFrames", &TestEntry_VMM_UnmapVma4KiB_ReleasesAnonymousFrames},

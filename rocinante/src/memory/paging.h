@@ -88,7 +88,7 @@ namespace PteBits {
 	static constexpr std::uint64_t kNoRead = (1ull << 61);
 	static constexpr std::uint64_t kNoExecute = (1ull << 62);
 	static constexpr std::uint64_t kRestrictPrivilegeLevel = (1ull << 63);
-}
+} // namespace PteBits
 
 enum class CacheMode : std::uint8_t {
 	StrongUncached = 0,  // _CACHE_SUC
