@@ -87,6 +87,24 @@ static void Test_TlbShootdown_State_GenerationAck_BasicSemantics(TestContext* ct
 	ROCINANTE_EXPECT_EQ_U64(ctx, state.GetAcknowledgedGeneration(static_cast<std::uint32_t>(CpuMask::kMaxCpuCount)), 0);
 }
 
+static void Test_TlbShootdown_State_OnlineMaskFreeze_BasicSemantics(TestContext* ctx) {
+	using Rocinante::Memory::TlbShootdown::State;
+
+	State state;
+	state.Reset();
+	ROCINANTE_EXPECT_TRUE(ctx, !state.IsOnlineCpuMaskFrozen());
+	ROCINANTE_EXPECT_TRUE(ctx, state.SetCpuOnline(0, true));
+	ROCINANTE_EXPECT_TRUE(ctx, state.SetCpuOnline(2, true));
+	ROCINANTE_EXPECT_TRUE(ctx, state.FreezeOnlineCpuMask());
+	ROCINANTE_EXPECT_TRUE(ctx, state.IsOnlineCpuMaskFrozen());
+	ROCINANTE_EXPECT_TRUE(ctx, !state.SetCpuOnline(3, true));
+	ROCINANTE_EXPECT_TRUE(ctx, !state.SetCpuOnline(2, false));
+	ROCINANTE_EXPECT_TRUE(ctx, state.GetOnlineCpuMask().Contains(0));
+	ROCINANTE_EXPECT_TRUE(ctx, state.GetOnlineCpuMask().Contains(2));
+	ROCINANTE_EXPECT_TRUE(ctx, !state.GetOnlineCpuMask().Contains(3));
+	ROCINANTE_EXPECT_TRUE(ctx, state.FreezeOnlineCpuMask());
+}
+
 static void Test_TlbShootdown_State_RequestMailbox_BasicSemantics(TestContext* ctx) {
 	using Rocinante::Memory::TlbShootdown::CpuMask;
 	using Rocinante::Memory::TlbShootdown::Request;
@@ -258,6 +276,10 @@ void TestEntry_TlbShootdown_CpuMask_BasicSemantics(TestContext* ctx) {
 
 void TestEntry_TlbShootdown_State_GenerationAck_BasicSemantics(TestContext* ctx) {
 	Test_TlbShootdown_State_GenerationAck_BasicSemantics(ctx);
+}
+
+void TestEntry_TlbShootdown_State_OnlineMaskFreeze_BasicSemantics(TestContext* ctx) {
+	Test_TlbShootdown_State_OnlineMaskFreeze_BasicSemantics(ctx);
 }
 
 void TestEntry_TlbShootdown_State_RequestMailbox_BasicSemantics(TestContext* ctx) {

@@ -145,7 +145,9 @@ using RequestHandler = bool (*)(const Request&, void* context);
  *
  * Explicit flaws:
  * - This file models request mailboxes, but not IPI delivery.
- * - This file does not yet define CPU online/offline lifecycle rules.
+ * - This file's current online/offline lifecycle rule is a bring-up policy:
+ *   once the online CPU set is frozen, later membership changes are rejected
+ *   until a future scheduler / hotplug design replaces that rule.
  * - This file rejects publication into a target mailbox that still has an
  *   unacknowledged generation, but it still does not fully arbitrate multiple
  *   concurrent shooters that race to publish new work at the same time.
@@ -277,6 +279,7 @@ class State final {
 
 	volatile std::uint64_t m_next_generation = 0;
 	volatile std::uint64_t m_online_cpu_mask_bits = 0;
+	volatile std::uint64_t m_online_cpu_mask_is_frozen = 0;
 	Mailbox m_mailbox_by_core[CpuMask::kMaxCpuCount] = {};
 	volatile std::uint64_t m_ack_generation_by_core[CpuMask::kMaxCpuCount] = {};
 
@@ -288,6 +291,7 @@ class State final {
 		void Reset() {
 			Rocinante::AtomicStoreU64Db(&m_next_generation, kNoGeneration);
 			Rocinante::AtomicStoreU64Db(&m_online_cpu_mask_bits, 0);
+			Rocinante::AtomicStoreU64Db(&m_online_cpu_mask_is_frozen, 0);
 			for (std::size_t core_index = 0; core_index < CpuMask::kMaxCpuCount; core_index++) {
 				Rocinante::AtomicStoreU64Db(
 					&m_mailbox_by_core[core_index].request_type,
@@ -301,6 +305,7 @@ class State final {
 
 		bool SetCpuOnline(std::uint32_t core_id, bool is_online) {
 			if (!CpuMask::IsRepresentableCoreId(core_id)) return false;
+			if (IsOnlineCpuMaskFrozen()) return false;
 
 			const std::uint64_t core_bit = (1ull << core_id);
 			for (;;) {
@@ -319,6 +324,16 @@ class State final {
 
 		CpuMask GetOnlineCpuMask() const {
 			return CpuMask{.bits = Rocinante::AtomicLoadU64AcqRel(&m_online_cpu_mask_bits)};
+		}
+
+		bool FreezeOnlineCpuMask() {
+			if (IsOnlineCpuMaskFrozen()) return true;
+			Rocinante::AtomicStoreU64Db(&m_online_cpu_mask_is_frozen, 1);
+			return true;
+		}
+
+		bool IsOnlineCpuMaskFrozen() const {
+			return Rocinante::AtomicLoadU64AcqRel(&m_online_cpu_mask_is_frozen) != 0;
 		}
 
 		std::uint64_t AllocateGeneration() {

@@ -8,11 +8,11 @@ compdb:
 	@bear --output $(PROJECT_ROOT_DIRECTORY)/../compile_commands.json -- $(MAKE) clean all
 
 run: $(TARGET)
-	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
+	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 4 \
 		-monitor none -kernel $<
 
 run-serial: $(TARGET)
-	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 1 \
+	qemu-system-loongarch64 -machine virt -cpu la464 -m 256M -smp 4 \
 		-nographic -serial stdio -monitor none \
 		-kernel $<
 
