@@ -1554,8 +1554,8 @@ nx_resume:
 		// I've confirmed this to be a QEMU bug. (NX bit is not respected in PTEs)
 		// Report: https://gitlab.com/qemu-project/qemu/-/issues/3319
 		// I've submitted a patch upstream,
-		// in the meantime we'll just be using my patched QEMU build for testing
-		// Source is available at: https://github.com/rail5/qemu
+		// it has been merged but not yet included in a released version of QEMU:
+		// https://github.com/gaosong715/qemu/tree/loongarch-for-upstream
 		Rocinante::Testing::Fail(ctx, __FILE__, __LINE__,
 			"EP=1 but no PNX observed for NX-mapped alias fetch");
 	}

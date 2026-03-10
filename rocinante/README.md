@@ -12,7 +12,7 @@ Rocinante is the kernel of the Walden operating system. It is a microkernel writ
 
 ## Building and Running
 
-**NOTE**: Upstream QEMU has some accuracy bugs in its LoongArch64 emulation. I have submitted patches to fix these, but before they're merged, you can build my [patched version of QEMU](https://github.com/rail5/qemu) to get correct behavior. Rocinante may not run correctly on unpatched QEMU.
+**NOTE**: Upstream QEMU has some accuracy bugs in its LoongArch64 emulation. I have submitted patches to fix these, but before they're merged into the stable branch, you can build the [patched version of QEMU](https://github.com/gaosong715/qemu/tree/loongarch-for-upstream).
 
 To build Rocinante, run `make` in this directory. The resulting kernel image will be located at `bin/rocinante.elf`.
 
