@@ -10,7 +10,7 @@
 
 namespace {
 
-static constinit Rocinante::Uart16550 g_uart(Rocinante::Platform::QemuVirt::kUartBase);
+constinit Rocinante::Uart16550 g_uart(Rocinante::Platform::QemuVirt::kUartBase);
 
 } // namespace
 

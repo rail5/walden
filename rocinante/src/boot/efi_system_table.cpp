@@ -68,7 +68,7 @@ Rocinante::Optional<std::uintptr_t> EfiSystemTable::TryGetDeviceTreePhysicalAddr
 
 		if (!entry.guid.Equals(kDeviceTreeGuid)) continue;
 
-		const std::uintptr_t dtb_physical_address = static_cast<std::uintptr_t>(entry.table_physical_address);
+		const auto dtb_physical_address = static_cast<std::uintptr_t>(entry.table_physical_address);
 		if (dtb_physical_address == 0) return Rocinante::nullopt;
 
 		const void* dtb = reinterpret_cast<const void*>(dtb_physical_address);

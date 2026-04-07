@@ -20,7 +20,7 @@ concept MemberObjectPointer =
 	std::is_member_object_pointer_v<decltype(MemberPtr)> &&
 	requires(const Node& node) {
 		node.*MemberPtr;
-	};
+};
 
 template <typename Node, auto MemberPtr>
 using MemberType = std::remove_cvref_t<decltype(std::declval<const Node&>().*MemberPtr)>;
@@ -78,8 +78,11 @@ public:
 	using LinksType = IntrusiveRedBlackTreeLinks<Node>;
 
 	IntrusiveRedBlackTree() = default;
+	~IntrusiveRedBlackTree() = default;
 	IntrusiveRedBlackTree(const IntrusiveRedBlackTree&) = delete;
 	IntrusiveRedBlackTree& operator=(const IntrusiveRedBlackTree&) = delete;
+	IntrusiveRedBlackTree(IntrusiveRedBlackTree&&) = delete;
+	IntrusiveRedBlackTree& operator=(IntrusiveRedBlackTree&&) = delete;
 
 	std::size_t NodeCount() const { return m_node_count; }
 	bool IsEmpty() const { return m_node_count == 0; }

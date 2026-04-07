@@ -10,7 +10,7 @@
 
 namespace {
 
-static const char* BootMemoryRegionTypeToString(Rocinante::Memory::BootMemoryRegion::Type type) {
+const char* BootMemoryRegionTypeToString(Rocinante::Memory::BootMemoryRegion::Type type) {
 	switch (type) {
 		case Rocinante::Memory::BootMemoryRegion::Type::UsableRAM:
 			return "UsableRAM";

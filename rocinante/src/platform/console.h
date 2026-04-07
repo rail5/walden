@@ -7,7 +7,7 @@
 
 namespace Rocinante {
 class Uart16550;
-}
+} // namespace Rocinante
 
 namespace Rocinante::Platform {
 

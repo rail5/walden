@@ -9,11 +9,11 @@
 
 namespace Rocinante {
 class Uart16550;
-}
+} // namespace Rocinante
 
 namespace Rocinante::Memory {
 class PhysicalMemoryManager;
-}
+} // namespace Rocinante::Memory
 
 namespace Rocinante::Boot {
 

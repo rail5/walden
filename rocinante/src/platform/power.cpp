@@ -10,7 +10,7 @@
 
 namespace {
 
-static std::uintptr_t g_syscon_base_address = Rocinante::Platform::QemuVirt::kSysconBase;
+std::uintptr_t g_syscon_base_address = Rocinante::Platform::QemuVirt::kSysconBase;
 
 } // namespace
 
