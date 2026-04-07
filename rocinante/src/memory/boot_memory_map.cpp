@@ -5,6 +5,8 @@
 
 #include "boot_memory_map.h"
 
+#include <cstddef>
+
 namespace Rocinante::Memory {
 
 namespace {
@@ -44,38 +46,38 @@ namespace Fdt {
 	constexpr std::uint32_t kTokenProp = 3;
 	constexpr std::uint32_t kTokenNop = 4;
 	constexpr std::uint32_t kTokenEnd = 9;
-}
+} // namespace Fdt
 
-static constexpr std::uint32_t ReadBe32(const void* p) {
+constexpr std::uint32_t ReadBe32(const void* p) {
 	const auto* b = static_cast<const std::uint8_t*>(p);
 	return
-		(static_cast<std::uint32_t>(b[0]) << 24) |
-		(static_cast<std::uint32_t>(b[1]) << 16) |
-		(static_cast<std::uint32_t>(b[2]) << 8) |
-		(static_cast<std::uint32_t>(b[3]) << 0);
+		(static_cast<std::uint32_t>(b[0]) << 24u) |
+		(static_cast<std::uint32_t>(b[1]) << 16u) |
+		(static_cast<std::uint32_t>(b[2]) << 8u) |
+		(static_cast<std::uint32_t>(b[3]) << 0u);
 }
 
-static constexpr std::uint64_t ReadBe64(const void* p) {
+constexpr std::uint64_t ReadBe64(const void* p) {
 	const auto* b = static_cast<const std::uint8_t*>(p);
 	return
-		(static_cast<std::uint64_t>(b[0]) << 56) |
-		(static_cast<std::uint64_t>(b[1]) << 48) |
-		(static_cast<std::uint64_t>(b[2]) << 40) |
-		(static_cast<std::uint64_t>(b[3]) << 32) |
-		(static_cast<std::uint64_t>(b[4]) << 24) |
-		(static_cast<std::uint64_t>(b[5]) << 16) |
-		(static_cast<std::uint64_t>(b[6]) << 8) |
-		(static_cast<std::uint64_t>(b[7]) << 0);
+		(static_cast<std::uint64_t>(b[0]) << 56u) |
+		(static_cast<std::uint64_t>(b[1]) << 48u) |
+		(static_cast<std::uint64_t>(b[2]) << 40u) |
+		(static_cast<std::uint64_t>(b[3]) << 32u) |
+		(static_cast<std::uint64_t>(b[4]) << 24u) |
+		(static_cast<std::uint64_t>(b[5]) << 16u) |
+		(static_cast<std::uint64_t>(b[6]) << 8u) |
+		(static_cast<std::uint64_t>(b[7]) << 0u);
 }
 
-static bool IsNullTerminatedStringWithin(const char* str, std::size_t max_len) {
+bool IsNullTerminatedStringWithin(const char* str, std::size_t max_len) {
 	for (std::size_t i = 0; i < max_len; i++) {
 		if (str[i] == '\0') return true;
 	}
 	return false;
 }
 
-static bool StartsWith(const char* str, const char* prefix) {
+bool StartsWith(const char* str, const char* prefix) {
 	while (*prefix) {
 		if (*str++ != *prefix++) return false;
 	}
@@ -92,7 +94,7 @@ struct FdtView final {
 	std::size_t mem_rsvmap_offset_bytes;
 };
 
-static bool TryMakeFdtView(const void* device_tree_blob, FdtView* out_view) {
+bool TryMakeFdtView(const void* device_tree_blob, FdtView* out_view) {
 	if (!device_tree_blob || !out_view) return false;
 	const auto* header = static_cast<const FdtHeader*>(device_tree_blob);
 
@@ -125,7 +127,7 @@ static bool TryMakeFdtView(const void* device_tree_blob, FdtView* out_view) {
 	return true;
 }
 
-static const char* TryGetStringFromStringsBlock(const FdtView& view, std::uint32_t string_offset_bytes) {
+const char* TryGetStringFromStringsBlock(const FdtView& view, std::uint32_t string_offset_bytes) {
 	if (string_offset_bytes >= view.strings_size_bytes) return nullptr;
 	const char* s = reinterpret_cast<const char*>(view.base + view.strings_offset_bytes + string_offset_bytes);
 	const std::size_t max_len = view.strings_size_bytes - string_offset_bytes;
@@ -133,14 +135,14 @@ static const char* TryGetStringFromStringsBlock(const FdtView& view, std::uint32
 	return s;
 }
 
-static bool TryReadU32Property(const std::uint8_t* value, std::uint32_t value_size_bytes, std::uint32_t* out_u32) {
+bool TryReadU32Property(const std::uint8_t* value, std::uint32_t value_size_bytes, std::uint32_t* out_u32) {
 	if (!value || !out_u32) return false;
 	if (value_size_bytes != 4) return false;
 	*out_u32 = ReadBe32(value);
 	return true;
 }
 
-static bool TryReadAddressSizePairs(
+bool TryReadAddressSizePairs(
 	const std::uint8_t* reg_value,
 	std::uint32_t reg_size_bytes,
 	std::uint32_t address_cells,
@@ -175,7 +177,7 @@ static bool TryReadAddressSizePairs(
 		}
 
 		// Size follows immediately after address.
-		const std::uint8_t* size_ptr = tuple + (address_cells * cell_size_bytes);
+		const std::uint8_t* size_ptr = tuple + (static_cast<size_t>(address_cells * cell_size_bytes));
 		if (size_cells == 1) {
 			size = ReadBe32(size_ptr);
 		} else {
@@ -196,11 +198,11 @@ struct Cursor final {
 	const std::uint8_t* end;
 };
 
-static bool CursorHasBytes(const Cursor& c, std::size_t n) {
+bool CursorHasBytes(const Cursor& c, std::size_t n) {
 	return (c.p + n) <= c.end;
 }
 
-static bool CursorReadBe32(Cursor* c, std::uint32_t* out_u32) {
+bool CursorReadBe32(Cursor* c, std::uint32_t* out_u32) {
 	if (!c || !out_u32) return false;
 	if (!CursorHasBytes(*c, 4)) return false;
 	*out_u32 = ReadBe32(c->p);
@@ -208,27 +210,27 @@ static bool CursorReadBe32(Cursor* c, std::uint32_t* out_u32) {
 	return true;
 }
 
-static bool CursorSkip(Cursor* c, std::size_t n) {
+bool CursorSkip(Cursor* c, std::size_t n) {
 	if (!c) return false;
 	if (!CursorHasBytes(*c, n)) return false;
 	c->p += n;
 	return true;
 }
 
-static bool CursorAlignTo(Cursor* c, std::size_t alignment) {
+bool CursorAlignTo(Cursor* c, std::size_t alignment) {
 	if (!c) return false;
-	const std::uintptr_t addr = reinterpret_cast<std::uintptr_t>(c->p);
+	const auto addr = reinterpret_cast<std::uintptr_t>(c->p);
 	const std::uintptr_t aligned = (addr + (alignment - 1)) & ~(alignment - 1);
-	const std::size_t delta = static_cast<std::size_t>(aligned - addr);
+	const auto delta = static_cast<std::size_t>(aligned - addr);
 	return CursorSkip(c, delta);
 }
 
 // Extract a C string from the structure block (node name) and advance the cursor.
 // The name is NUL-terminated and padded to a 4-byte boundary.
-static bool CursorReadNodeName(Cursor* c, const char** out_name) {
+bool CursorReadNodeName(Cursor* c, const char** out_name) {
 	if (!c || !out_name) return false;
 	const char* name = reinterpret_cast<const char*>(c->p);
-	const std::size_t remaining = static_cast<std::size_t>(c->end - c->p);
+	const auto remaining = static_cast<std::size_t>(c->end - c->p);
 	if (!IsNullTerminatedStringWithin(name, remaining)) return false;
 
 	// Skip over the string including its NUL terminator.
@@ -242,7 +244,7 @@ static bool CursorReadNodeName(Cursor* c, const char** out_name) {
 }
 
 // Parses the DTB "memreserve" table and adds regions as Reserved.
-static bool ParseMemReserveTable(const FdtView& view, BootMemoryMap* out_map) {
+bool ParseMemReserveTable(const FdtView& view, BootMemoryMap* out_map) {
 	if (!out_map) return false;
 
 	// memreserve map is a sequence of (address, size) pairs, each 64-bit big-endian.
@@ -277,7 +279,7 @@ struct NodeContext final {
 // The structure parser above needs to know the current node name when it sees a
 // property. To keep the core parse loop readable, we do a second implementation
 // that tracks node names explicitly, and call that instead.
-static bool ParseStructureBlockWithNodeNames(const FdtView& view, BootMemoryMap* out_map) {
+bool ParseStructureBlockWithNodeNames(const FdtView& view, BootMemoryMap* out_map) {
 	if (!out_map) return false;
 
 	Cursor c{

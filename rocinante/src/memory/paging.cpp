@@ -16,7 +16,7 @@ namespace Rocinante::Memory::Paging {
 
 namespace {
 
-static bool IsPhysMapLeafMapping(
+bool IsPhysMapLeafMapping(
 	std::uintptr_t virtual_page_base,
 	std::uintptr_t physical_page_base,
 	AddressSpaceBits address_bits
@@ -33,21 +33,21 @@ static bool IsPhysMapLeafMapping(
 //   - CRMD.DA=1, CRMD.PG=0 => direct address translation mode
 //   - CRMD.DA=0, CRMD.PG=1 => mapped address translation mode
 namespace Csr {
-	static constexpr std::uint32_t kCurrentModeInformation = 0x0; // CSR.CRMD
-}
+	constexpr std::uint32_t kCurrentModeInformation = 0x0; // CSR.CRMD
+} // namespace Csr
 
 namespace CurrentModeInformation {
-	static constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3); // CRMD.DA
-	static constexpr std::uint64_t kPagingEnable = (1ull << 4);           // CRMD.PG
-}
+	constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3u); // CRMD.DA
+	constexpr std::uint64_t kPagingEnable = (1ull << 4u);           // CRMD.PG
+} // namespace CurrentModeInformation
 
-static inline std::uint64_t ReadCurrentModeInformation() {
+inline std::uint64_t ReadCurrentModeInformation() {
 	std::uint64_t value;
 	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(Csr::kCurrentModeInformation));
 	return value;
 }
 
-static inline bool IsMappedAddressTranslationMode() {
+inline bool IsMappedAddressTranslationMode() {
 	const std::uint64_t crmd = ReadCurrentModeInformation();
 	const bool direct_addressing = (crmd & CurrentModeInformation::kDirectAddressingEnable) != 0;
 	const bool paging = (crmd & CurrentModeInformation::kPagingEnable) != 0;
@@ -59,7 +59,7 @@ static inline bool IsMappedAddressTranslationMode() {
 // Our PTE encoding places flags in the high bits (e.g. No-Execute at bit 62).
 // When extracting the physical address, we must mask out those flags.
 //
-static constexpr std::uint8_t kMaxSupportedLevelCount = 6; // (64 - 12 + 8) / 9 = 6 for 4 KiB pages.
+constexpr std::uint8_t kMaxSupportedLevelCount = 6; // (64 - 12 + 8) / 9 = 6 for 4 KiB pages.
 
 constexpr std::uint8_t BitIndexFromSingleBitMask(std::uint64_t mask) {
 	std::uint8_t index = 0;
@@ -69,7 +69,7 @@ constexpr std::uint8_t BitIndexFromSingleBitMask(std::uint64_t mask) {
 	return index;
 }
 
-static constexpr std::uint8_t kLowestHighFlagBit =
+constexpr std::uint8_t kLowestHighFlagBit =
 	(BitIndexFromSingleBitMask(PteBits::kNoRead) < BitIndexFromSingleBitMask(PteBits::kNoExecute))
 		? BitIndexFromSingleBitMask(PteBits::kNoRead)
 		: BitIndexFromSingleBitMask(PteBits::kNoExecute);
@@ -77,9 +77,9 @@ static constexpr std::uint8_t kLowestHighFlagBit =
 // Highest PALEN we can encode without colliding with the high-bit flags we use.
 // If PALEN == kLowestHighFlagBit, the highest physical address bit is
 // (PALEN-1) == (kLowestHighFlagBit-1), which is safe.
-static constexpr std::uint8_t kMaxEncodablePhysicalAddressBits = kLowestHighFlagBit;
+constexpr std::uint8_t kMaxEncodablePhysicalAddressBits = kLowestHighFlagBit;
 
-static Rocinante::Memory::Paging::AddressSpaceBits AddressSpaceBitsFromCPUCFG() {
+Rocinante::Memory::Paging::AddressSpaceBits AddressSpaceBitsFromCPUCFG() {
 	const std::uint32_t virtual_address_bits = Rocinante::GetCPUCFG().VirtualAddressBits();
 	const std::uint32_t physical_address_bits = Rocinante::GetCPUCFG().PhysicalAddressBits();
 	return Rocinante::Memory::Paging::AddressSpaceBits{
@@ -88,15 +88,15 @@ static Rocinante::Memory::Paging::AddressSpaceBits AddressSpaceBitsFromCPUCFG() 
 	};
 }
 
-static std::uint64_t MaskFromBits(std::uint8_t bits) {
+std::uint64_t MaskFromBits(std::uint8_t bits) {
 	if (bits >= 64) return ~0ull;
 	if (bits == 0) return 0;
 	return (1ull << bits) - 1ull;
 }
 
-static std::uint8_t LevelCountFromVirtualAddressBits(std::uint8_t virtual_address_bits) {
-	const std::uint32_t offset_bits = static_cast<std::uint32_t>(Rocinante::Memory::Paging::kPageShiftBits);
-	const std::uint32_t index_bits_per_level = static_cast<std::uint32_t>(Rocinante::Memory::Paging::kIndexBitsPerLevel);
+std::uint8_t LevelCountFromVirtualAddressBits(std::uint8_t virtual_address_bits) {
+	const auto offset_bits = static_cast<std::uint32_t>(Rocinante::Memory::Paging::kPageShiftBits);
+	const auto index_bits_per_level = static_cast<std::uint32_t>(Rocinante::Memory::Paging::kIndexBitsPerLevel);
 
 	const std::uint32_t indexable_bits = (virtual_address_bits > offset_bits) ? (virtual_address_bits - offset_bits) : 0u;
 	std::uint32_t level_count = (indexable_bits + index_bits_per_level - 1u) / index_bits_per_level;
@@ -105,7 +105,7 @@ static std::uint8_t LevelCountFromVirtualAddressBits(std::uint8_t virtual_addres
 	return static_cast<std::uint8_t>(level_count);
 }
 
-static std::uint64_t PhysicalPageBaseMaskFromBits(std::uint8_t physical_address_bits) {
+std::uint64_t PhysicalPageBaseMaskFromBits(std::uint8_t physical_address_bits) {
 	if (physical_address_bits > kMaxEncodablePhysicalAddressBits) return 0;
 	if (physical_address_bits < Rocinante::Memory::Paging::kPageShiftBits) {
 		return 0;
@@ -114,37 +114,37 @@ static std::uint64_t PhysicalPageBaseMaskFromBits(std::uint8_t physical_address_
 	return physical_address_mask & Rocinante::Memory::Paging::kPageBaseMask;
 }
 
-static constexpr std::uint64_t IndexMaskForLevel() {
+constexpr std::uint64_t IndexMaskForLevel() {
 	return (1ull << kIndexBitsPerLevel) - 1ull;
 }
 
-static constexpr std::size_t IndexFromVirtualAddress(std::uintptr_t virtual_address, std::size_t shift_bits) {
+constexpr std::size_t IndexFromVirtualAddress(std::uintptr_t virtual_address, std::size_t shift_bits) {
 	return static_cast<std::size_t>((virtual_address >> shift_bits) & IndexMaskForLevel());
 }
 
-static bool IsPageAligned(std::uintptr_t address) {
+bool IsPageAligned(std::uintptr_t address) {
 	return (address & kPageOffsetMask) == 0;
 }
 
-static constexpr std::size_t ShiftBitsForLevel(std::size_t level) {
+constexpr std::size_t ShiftBitsForLevel(std::size_t level) {
 	return Rocinante::Memory::Paging::kPageShiftBits + (level * Rocinante::Memory::Paging::kIndexBitsPerLevel);
 }
 
-static std::size_t IndexFromVirtualAddressAtLevel(std::uintptr_t virtual_address, std::size_t level) {
+std::size_t IndexFromVirtualAddressAtLevel(std::uintptr_t virtual_address, std::size_t level) {
 	return IndexFromVirtualAddress(virtual_address, ShiftBitsForLevel(level));
 }
 
-static std::uint64_t CacheBitsForMode(CacheMode mode) {
+std::uint64_t CacheBitsForMode(CacheMode mode) {
 	return (static_cast<std::uint64_t>(mode) << PteBits::kCacheShift) & PteBits::kCacheMask;
 }
 
-static std::uint64_t PrivilegeLevelKernelBits() {
+std::uint64_t PrivilegeLevelKernelBits() {
 	// PLV=0 is kernel in the LoongArch privileged spec.
 	static constexpr std::uint64_t kKernelPrivilegeLevel = 0;
 	return (kKernelPrivilegeLevel << PteBits::kPrivilegeLevelShift) & PteBits::kPrivilegeLevelMask;
 }
 
-static std::uint64_t LeafFlagsForPermissions(PagePermissions permissions) {
+std::uint64_t LeafFlagsForPermissions(PagePermissions permissions) {
 	std::uint64_t flags = 0;
 
 	// V (Valid) indicates a valid translation exists.
@@ -170,7 +170,7 @@ static std::uint64_t LeafFlagsForPermissions(PagePermissions permissions) {
 	return flags;
 }
 
-static std::uint64_t EncodeLeafEntry(std::uintptr_t physical_page_base, std::uint64_t physical_page_base_mask, PagePermissions permissions) {
+std::uint64_t EncodeLeafEntry(std::uintptr_t physical_page_base, std::uint64_t physical_page_base_mask, PagePermissions permissions) {
 	// Store the aligned physical page base in the high bits, and OR in flags.
 	//
 	// IMPORTANT:
@@ -180,7 +180,7 @@ static std::uint64_t EncodeLeafEntry(std::uintptr_t physical_page_base, std::uin
 	return (static_cast<std::uint64_t>(physical_page_base) & physical_page_base_mask) | LeafFlagsForPermissions(permissions);
 }
 
-static std::uint64_t EncodeTablePointer(std::uintptr_t physical_page_base, std::uint64_t physical_page_base_mask) {
+std::uint64_t EncodeTablePointer(std::uintptr_t physical_page_base, std::uint64_t physical_page_base_mask) {
 	// For non-leaf page-table entries that point to a next-level table, encode:
 	// - aligned physical base
 	// - V=1, P=1
@@ -188,24 +188,24 @@ static std::uint64_t EncodeTablePointer(std::uintptr_t physical_page_base, std::
 	return (static_cast<std::uint64_t>(physical_page_base) & physical_page_base_mask) | PteBits::kValid | PteBits::kPresent;
 }
 
-static bool EntryIsPresent(std::uint64_t entry) {
+bool EntryIsPresent(std::uint64_t entry) {
 	// Treat "present" as "walkable": require both the P and V fields.
 	return (entry & (PteBits::kPresent | PteBits::kValid)) == (PteBits::kPresent | PteBits::kValid);
 }
 
-static bool TableIsEmpty(const PageTablePage* table) {
+bool TableIsEmpty(const PageTablePage* table) {
 	if (!table) return false;
-	for (std::size_t i = 0; i < kEntriesPerTable; i++) {
-		if (EntryIsPresent(table->entries[i])) return false;
+	for (std::uint64_t entry : table->entries) {
+		if (EntryIsPresent(entry)) return false;
 	}
 	return true;
 }
 
-static std::uintptr_t EntryPhysicalPageBase(std::uint64_t entry, std::uint64_t physical_page_base_mask) {
+std::uintptr_t EntryPhysicalPageBase(std::uint64_t entry, std::uint64_t physical_page_base_mask) {
 	return static_cast<std::uintptr_t>(entry & physical_page_base_mask);
 }
 
-static PageTablePage* PageTablePageFromPhysical(std::uintptr_t physical_page_base) {
+PageTablePage* PageTablePageFromPhysical(std::uintptr_t physical_page_base) {
 	if (!IsMappedAddressTranslationMode()) {
 		// Direct-address mode: physical address equals (low bits of) virtual address.
 		return reinterpret_cast<PageTablePage*>(physical_page_base);
@@ -222,7 +222,7 @@ static PageTablePage* PageTablePageFromPhysical(std::uintptr_t physical_page_bas
 	return reinterpret_cast<PageTablePage*>(physmap_virtual);
 }
 
-static const PageTablePage* PageTablePageFromPhysicalConst(std::uintptr_t physical_page_base) {
+const PageTablePage* PageTablePageFromPhysicalConst(std::uintptr_t physical_page_base) {
 	if (!IsMappedAddressTranslationMode()) {
 		return reinterpret_cast<const PageTablePage*>(physical_page_base);
 	}
@@ -236,7 +236,7 @@ static const PageTablePage* PageTablePageFromPhysicalConst(std::uintptr_t physic
 	return reinterpret_cast<const PageTablePage*>(physmap_virtual);
 }
 
-static bool EnsureNextLevelTable(
+bool EnsureNextLevelTable(
 	PhysicalMemoryManager* pmm,
 	PageTablePage* current_table,
 	std::size_t index,
@@ -276,7 +276,7 @@ struct Layout final {
 	std::uint64_t physical_page_base_mask;
 };
 
-static Rocinante::Optional<Layout> BuildLayout(AddressSpaceBits address_bits) {
+Rocinante::Optional<Layout> BuildLayout(AddressSpaceBits address_bits) {
 	if (address_bits.virtual_address_bits == 0) return Rocinante::nullopt;
 	if (address_bits.physical_address_bits == 0) return Rocinante::nullopt;
 	if (address_bits.virtual_address_bits > 64) return Rocinante::nullopt;
@@ -300,7 +300,7 @@ static Rocinante::Optional<Layout> BuildLayout(AddressSpaceBits address_bits) {
 	};
 }
 
-static bool ValidateVirtualAddress(std::uintptr_t virtual_address, const Layout& layout) {
+bool ValidateVirtualAddress(std::uintptr_t virtual_address, const Layout& layout) {
 	// LoongArch LA64 uses canonical virtual addresses in mapped address translation mode.
 	//
 	// Given N valid virtual address bits, the CPU expects bits [63:N] to be a sign
@@ -315,18 +315,18 @@ static bool ValidateVirtualAddress(std::uintptr_t virtual_address, const Layout&
 
 	const std::uint64_t low_mask = layout.virtual_address_low_mask;
 	const std::uint64_t upper_mask = ~low_mask;
-	const std::uint64_t sign_bit = (1ull << (layout.virtual_address_bits - 1));
+	const std::uint64_t sign_bit = (1ull << (layout.virtual_address_bits - 1u));
 	const std::uint64_t address = static_cast<std::uint64_t>(virtual_address);
 	const bool sign = (address & sign_bit) != 0;
 	const std::uint64_t upper = address & upper_mask;
 	return sign ? (upper == upper_mask) : (upper == 0);
 }
 
-static bool ValidatePhysicalAddress(std::uintptr_t physical_address, const Layout& layout) {
+bool ValidatePhysicalAddress(std::uintptr_t physical_address, const Layout& layout) {
 	return (static_cast<std::uint64_t>(physical_address) & ~layout.physical_address_mask) == 0;
 }
 
-static bool FreeAllPageTablesRecursive(
+bool FreeAllPageTablesRecursive(
 	PhysicalMemoryManager* pmm,
 	std::uintptr_t table_physical_base,
 	const Layout& layout,
@@ -511,7 +511,7 @@ bool MapPage4KiB(
 	auto* table = PageTablePageFromPhysical(root.root_physical_address);
 	if (!table) return false;
 
-	for (std::size_t level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
+	for (auto level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
 		const std::size_t index = IndexFromVirtualAddressAtLevel(virtual_address, level);
 		PageTablePage* next_table = nullptr;
 		if (!EnsureNextLevelTable(pmm, table, index, &next_table, layout.physical_page_base_mask)) return false;
@@ -559,11 +559,11 @@ bool UnmapPage4KiB(PhysicalMemoryManager* pmm, const PageTableRoot& root, std::u
 
 	auto* table = PageTablePageFromPhysical(root.root_physical_address);
 	if (!table) return false;
-	const std::size_t root_level = static_cast<std::size_t>(layout.level_count - 1);
+	const auto root_level = static_cast<std::size_t>(layout.level_count - 1);
 	tables_by_level[root_level] = table;
 	physical_by_level[root_level] = root.root_physical_address;
 
-	for (std::size_t level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
+	for (auto level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
 		const std::size_t index = IndexFromVirtualAddressAtLevel(virtual_address, level);
 		child_index_by_level[level] = index;
 		const std::uint64_t entry = table->entries[index];
@@ -628,7 +628,7 @@ Rocinante::Optional<std::uintptr_t> Translate(const PageTableRoot& root, std::ui
 	const auto* table = PageTablePageFromPhysicalConst(root.root_physical_address);
 	if (!table) return Rocinante::nullopt;
 
-	for (std::size_t level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
+	for (auto level = static_cast<std::size_t>(layout.level_count - 1); level > 0; level--) {
 		const std::size_t index = IndexFromVirtualAddressAtLevel(virtual_address, level);
 		const std::uint64_t entry = table->entries[index];
 		// This software walker does not yet support huge pages. In the LoongArch

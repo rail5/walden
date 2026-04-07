@@ -61,7 +61,7 @@ struct CpuMask final {
 	}
 };
 
-enum class RequestType : std::uint64_t {
+enum class RequestType : std::uint8_t {
 	None = 0,
 	InvalidateAsid = 1,
 	InvalidatePage = 2,
@@ -91,7 +91,7 @@ struct Request final {
 		if (type == RequestType::None) return false;
 
 		if (type == RequestType::InvalidatePage) {
-			const std::uintptr_t page_offset_mask =
+			const auto page_offset_mask =
 				static_cast<std::uintptr_t>(Rocinante::Memory::Paging::kPageOffsetMask);
 			return (virtual_address_page_base & page_offset_mask) == 0;
 		}

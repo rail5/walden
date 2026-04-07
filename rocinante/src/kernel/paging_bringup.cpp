@@ -38,24 +38,24 @@ extern "C" void __exception_entry();
 // These values are populated while building the bootstrap page tables (paging
 // still off), then consumed after paging is enabled and we have switched to a
 // higher-half stack.
-static std::uintptr_t g_paging_bringup_heap_virtual_base = 0;
-static std::size_t g_paging_bringup_heap_size_bytes = 0;
+std::uintptr_t g_paging_bringup_heap_virtual_base = 0;
+std::size_t g_paging_bringup_heap_size_bytes = 0;
 
 // Bring-up lazy-mapped range serviced by the kernel pager.
 //
 // This is a reserved VA range (allocated from the kernel VA allocator) that is
 // intentionally left unmapped so that a controlled page-fault can validate the
 // paging-fault observer + retry mechanism.
-static std::uintptr_t g_paging_bringup_lazy_virtual_base = 0;
-static std::size_t g_paging_bringup_lazy_size_bytes = 0;
+std::uintptr_t g_paging_bringup_lazy_virtual_base = 0;
+std::size_t g_paging_bringup_lazy_size_bytes = 0;
 
 // Higher-half MMIO aliases.
 //
 // These are populated while constructing the bootstrap page tables, then used
 // after higher-half entry to retarget early MMIO pointers away from the low
 // half so PGDL can be switched to an empty address space.
-static std::uintptr_t g_paging_bringup_uart_mmio_virtual_base = 0;
-static std::uintptr_t g_paging_bringup_syscon_mmio_virtual_base = 0;
+std::uintptr_t g_paging_bringup_uart_mmio_virtual_base = 0;
+std::uintptr_t g_paging_bringup_syscon_mmio_virtual_base = 0;
 
 // Post-paging continuation.
 //
@@ -63,9 +63,9 @@ static std::uintptr_t g_paging_bringup_syscon_mmio_virtual_base = 0;
 // before paging is enabled (while code is executing in low/direct addressing),
 // then invoked after paging is enabled by jumping to the higher-half alias of
 // the same function.
-static std::uintptr_t g_post_paging_continuation_low = 0;
+std::uintptr_t g_post_paging_continuation_low = 0;
 
-[[noreturn]] [[gnu::noinline]] static void PagingBringup_HigherHalfStackContinuation() {
+[[noreturn]] [[gnu::noinline]] void PagingBringup_HigherHalfStackContinuation() {
 	auto& uart = Rocinante::Platform::GetEarlyUart();
 
 	// This function is entered via an assembly jump after paging is enabled.
@@ -104,10 +104,10 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 	// - Do not change CSR.TLBRENTRY here.
 	const Rocinante::Memory::PagingState* paging_state = Rocinante::Memory::TryGetPagingState();
 	if (paging_state && paging_state->address_bits.virtual_address_bits != 0) {
-		const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+		const auto kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
 		const std::uintptr_t kernel_higher_half_base =
 			Rocinante::Memory::VirtualLayout::KernelHigherHalfBase(paging_state->address_bits.virtual_address_bits);
-		const std::uintptr_t exception_entry_low = reinterpret_cast<std::uintptr_t>(&__exception_entry);
+		const auto exception_entry_low = reinterpret_cast<std::uintptr_t>(&__exception_entry);
 		const std::uintptr_t exception_entry_high = kernel_higher_half_base + (exception_entry_low - kernel_physical_base);
 
 		uart.puts("Paging bring-up: relocating EENTRY/MERRENTRY to entry=");
@@ -178,7 +178,7 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 	// Pager self-check: trigger one controlled page-invalid store in the lazy range.
 	if (g_paging_bringup_lazy_virtual_base != 0 && g_paging_bringup_lazy_size_bytes != 0) {
 		uart.puts("Paging bring-up: kernel pager lazy-map self-check begin\n");
-		volatile std::uint64_t* p = reinterpret_cast<volatile std::uint64_t*>(g_paging_bringup_lazy_virtual_base);
+		volatile auto* p = reinterpret_cast<volatile std::uint64_t*>(g_paging_bringup_lazy_virtual_base);
 		*p = 0x1122334455667788ull;
 		const std::uint64_t readback = *p;
 		uart.puts("Paging bring-up: kernel pager lazy-map self-check ok; readback=");
@@ -258,12 +258,12 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 		// - Invalidate TLB entries for each unmapped VA (INVTLB op=0x6).
 		// - Log software translations before/after as a sanity check.
 		{
-			const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
-			const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+			const auto kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+			const auto kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
 			const std::uintptr_t kernel_size_bytes = (kernel_physical_end > kernel_physical_base)
 				? (kernel_physical_end - kernel_physical_base)
 				: 0;
-			const std::size_t map_size_rounded =
+			const auto map_size_rounded =
 				static_cast<std::size_t>((kernel_size_bytes + Rocinante::Memory::Paging::kPageSizeBytes - 1) &
 					~(Rocinante::Memory::Paging::kPageSizeBytes - 1));
 
@@ -423,8 +423,8 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 
 	// We now jump to a higher-half alias of the continuation.
 	if (g_post_paging_continuation_low != 0 && paging_state && paging_state->address_bits.virtual_address_bits != 0) {
-		const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
-		const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+		const auto kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+		const auto kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
 		const std::uintptr_t continuation_low = g_post_paging_continuation_low;
 
 		if (continuation_low < kernel_physical_base || continuation_low >= kernel_physical_end) {
@@ -488,12 +488,16 @@ static std::uintptr_t g_post_paging_continuation_low = 0;
 namespace Rocinante::Kernel {
 
 void RunPagingBringup(
-	Rocinante::Uart16550& uart,
-	Rocinante::Memory::PhysicalMemoryManager& pmm,
+	const Rocinante::Uart16550& uart,
+	Rocinante::Memory::PhysicalMemoryManager* pmm,
 	std::uintptr_t kernel_physical_base,
 	std::uintptr_t kernel_physical_end,
 	void (*post_paging_continuation)()
 ) {
+	if (!pmm) {
+		uart.puts("Paging bring-up: null PMM pointer; skipping paging bring-up\n");
+		return;
+	}
 	uart.puts("\nPaging bring-up: building bootstrap page tables\n");
 
 	// The continuation must live within the kernel image so we can jump to a
@@ -548,8 +552,8 @@ void RunPagingBringup(
 	// - LoongArch-Vol1-EN.html, Section 5.2 (Virtual Address Space and Address
 	//   Translation Mode): CRMD.DA/CRMD.PG select direct vs mapped translation.
 	//
-	const std::uintptr_t physmap_physical_base = pmm.TrackedPhysicalBase();
-	const std::uintptr_t tracked_physical_limit = pmm.TrackedPhysicalLimit();
+	const std::uintptr_t physmap_physical_base = pmm->TrackedPhysicalBase();
+	const std::uintptr_t tracked_physical_limit = pmm->TrackedPhysicalLimit();
 	std::size_t physmap_size_bytes = 0;
 	if (tracked_physical_limit > physmap_physical_base) {
 		const std::uintptr_t physmap_max_physical_limit =
@@ -572,7 +576,7 @@ void RunPagingBringup(
 			return;
 		}
 
-		const std::size_t tracked_size_bytes =
+		const auto tracked_size_bytes =
 			static_cast<std::size_t>(tracked_physical_limit - physmap_physical_base);
 		// Bring-up policy:
 		// Expand the physmap window to cover the entire PMM-tracked RAM span so
@@ -586,7 +590,7 @@ void RunPagingBringup(
 		uart.puts("Paging bring-up: no tracked RAM for physmap; skipping physmap build\n");
 	}
 
-	const auto root_or = Rocinante::Memory::Paging::AllocateRootPageTable(&pmm);
+	const auto root_or = Rocinante::Memory::Paging::AllocateRootPageTable(pmm);
 	if (!root_or.has_value()) {
 		uart.puts("Paging bring-up: failed to allocate root page table\n");
 		return;
@@ -600,7 +604,7 @@ void RunPagingBringup(
 	// Identity-map the kernel image so enabling paging does not immediately
 	// fault while executing in the low physical mapping.
 	const std::uintptr_t kernel_size_bytes = kernel_physical_end - kernel_physical_base;
-	const std::size_t map_size_rounded =
+	const auto map_size_rounded =
 		static_cast<std::size_t>((kernel_size_bytes + Rocinante::Memory::Paging::kPageSizeBytes - 1) &
 				~(Rocinante::Memory::Paging::kPageSizeBytes - 1));
 
@@ -612,7 +616,7 @@ void RunPagingBringup(
 	};
 
 	if (!Rocinante::Memory::Paging::MapRange4KiB(
-		&pmm,
+		pmm,
 		root,
 		kernel_physical_base,
 		kernel_physical_base,
@@ -637,7 +641,7 @@ void RunPagingBringup(
 	Rocinante::Memory::KernelVirtualAddressAllocator kernel_va;
 
 	if (!Rocinante::Memory::Paging::MapRange4KiB(
-		&pmm,
+		pmm,
 		root,
 		kernel_higher_half_base,
 		kernel_physical_base,
@@ -667,7 +671,7 @@ void RunPagingBringup(
 			//	This should be behavior-neutral for current bring-up because the first
 			//	post-kernel allocation still begins at kernel_higher_half_end.
 			kernel_va.Init(kernel_higher_half_base, physmap_base);
-			const std::size_t kernel_higher_half_size_bytes =
+			const auto kernel_higher_half_size_bytes =
 				static_cast<std::size_t>(kernel_higher_half_end - kernel_higher_half_base);
 			if (!kernel_va.Reserve(kernel_higher_half_base, kernel_higher_half_size_bytes)) {
 				uart.puts("Paging bring-up: WARNING: failed to reserve kernel higher-half VA window; falling back\n");
@@ -695,7 +699,7 @@ void RunPagingBringup(
 	const std::uintptr_t uart_page_base =
 		UART_BASE & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
 	if (!Rocinante::Memory::Paging::MapRange4KiB(
-		&pmm,
+		pmm,
 		root,
 		uart_page_base,
 		uart_page_base,
@@ -709,7 +713,7 @@ void RunPagingBringup(
 	const std::uintptr_t syscon_page_base =
 		kSysconBase & ~(Rocinante::Memory::Paging::kPageSizeBytes - 1);
 	if (!Rocinante::Memory::Paging::MapRange4KiB(
-		&pmm,
+		pmm,
 		root,
 		syscon_page_base,
 		syscon_page_base,
@@ -739,7 +743,7 @@ void RunPagingBringup(
 			static_cast<std::size_t>(Rocinante::Platform::QemuVirt::kPoweroffOffset) + 1u;
 
 		const auto uart_mmio_or = Rocinante::Memory::KernelMappings::IoremapMmio4KiB(
-			&pmm,
+			pmm,
 			root,
 			&kernel_va,
 			UART_BASE,
@@ -753,7 +757,7 @@ void RunPagingBringup(
 		}
 
 		const auto syscon_mmio_or = Rocinante::Memory::KernelMappings::IoremapMmio4KiB(
-			&pmm,
+			pmm,
 			root,
 			&kernel_va,
 			kSysconBase,
@@ -802,7 +806,7 @@ void RunPagingBringup(
 		};
 
 		const auto stack_or = Rocinante::Memory::KernelMappings::MapNewGuardedRange4KiB(
-			&pmm,
+			pmm,
 			root,
 			&kernel_va,
 			kHigherHalfStackGuardPageCount,
@@ -867,7 +871,7 @@ void RunPagingBringup(
 			};
 
 			const auto heap_or = Rocinante::Memory::KernelMappings::MapNewRange4KiB(
-				&pmm,
+				pmm,
 				root,
 				&kernel_va,
 				kHeapSizeBytes,
@@ -943,7 +947,7 @@ void RunPagingBringup(
 		};
 
 		if (!Rocinante::Memory::Paging::MapRange4KiB(
-			&pmm,
+			pmm,
 			root,
 			physmap_virtual_base,
 			physmap_physical_base,
@@ -1001,10 +1005,10 @@ void RunPagingBringup(
 		constexpr std::size_t kShiftDir2 = kShiftDirl + Rocinante::Memory::Paging::kIndexBitsPerLevel;
 		constexpr std::size_t kShiftDir3 = kShiftDir2 + Rocinante::Memory::Paging::kIndexBitsPerLevel;
 
-		const std::size_t idx_dir3 = static_cast<std::size_t>((probe_va >> kShiftDir3) & kIndexMask);
-		const std::size_t idx_dir2 = static_cast<std::size_t>((probe_va >> kShiftDir2) & kIndexMask);
-		const std::size_t idx_dirl = static_cast<std::size_t>((probe_va >> kShiftDirl) & kIndexMask);
-		const std::size_t idx_pt = static_cast<std::size_t>((probe_va >> kShiftPt) & kIndexMask);
+		const auto idx_dir3 = static_cast<std::size_t>((probe_va >> kShiftDir3) & kIndexMask);
+		const auto idx_dir2 = static_cast<std::size_t>((probe_va >> kShiftDir2) & kIndexMask);
+		const auto idx_dirl = static_cast<std::size_t>((probe_va >> kShiftDirl) & kIndexMask);
+		const auto idx_pt = static_cast<std::size_t>((probe_va >> kShiftPt) & kIndexMask);
 
 		uart.puts("Paging bring-up: idx d3=");
 		uart.write_dec_u64(idx_dir3);
@@ -1090,10 +1094,10 @@ void RunPagingBringup(
 			constexpr std::size_t kShiftDir2 = kShiftDirl + Rocinante::Memory::Paging::kIndexBitsPerLevel;
 			constexpr std::size_t kShiftDir3 = kShiftDir2 + Rocinante::Memory::Paging::kIndexBitsPerLevel;
 
-			const std::size_t idx_dir3 = static_cast<std::size_t>((probe_va >> kShiftDir3) & kIndexMask);
-			const std::size_t idx_dir2 = static_cast<std::size_t>((probe_va >> kShiftDir2) & kIndexMask);
-			const std::size_t idx_dirl = static_cast<std::size_t>((probe_va >> kShiftDirl) & kIndexMask);
-			const std::size_t idx_pt = static_cast<std::size_t>((probe_va >> kShiftPt) & kIndexMask);
+			const auto idx_dir3 = static_cast<std::size_t>((probe_va >> kShiftDir3) & kIndexMask);
+			const auto idx_dir2 = static_cast<std::size_t>((probe_va >> kShiftDir2) & kIndexMask);
+			const auto idx_dirl = static_cast<std::size_t>((probe_va >> kShiftDirl) & kIndexMask);
+			const auto idx_pt = static_cast<std::size_t>((probe_va >> kShiftPt) & kIndexMask);
 
 			auto* dir3 = reinterpret_cast<Rocinante::Memory::Paging::PageTablePage*>(root.root_physical_address);
 			if (!dir3) return Rocinante::nullopt;
@@ -1165,7 +1169,7 @@ void RunPagingBringup(
 			uart.puts(uart_nx ? "1" : "0");
 			uart.putc('\n');
 
-			const std::uint64_t expected_cache =
+			const auto expected_cache =
 				static_cast<std::uint64_t>(Rocinante::Memory::Paging::CacheMode::StrongUncached);
 			if (uart_cache_field != expected_cache || !uart_nx) {
 				uart.puts("Paging bring-up: MMIO self-check FAILED (UART attributes)\n");
@@ -1210,7 +1214,7 @@ void RunPagingBringup(
 			uart.puts(syscon_nx ? "1" : "0");
 			uart.putc('\n');
 
-			const std::uint64_t expected_cache =
+			const auto expected_cache =
 				static_cast<std::uint64_t>(Rocinante::Memory::Paging::CacheMode::StrongUncached);
 			if (syscon_cache_field != expected_cache || !syscon_nx) {
 				uart.puts("Paging bring-up: MMIO self-check FAILED (syscon attributes)\n");
@@ -1289,7 +1293,7 @@ void RunPagingBringup(
 			uart.puts(root_nx ? "1" : "0");
 			uart.putc('\n');
 
-			const std::uint64_t expected_cache =
+			const auto expected_cache =
 				static_cast<std::uint64_t>(Rocinante::Memory::Paging::CacheMode::CoherentCached);
 			if (root_cache_field != expected_cache || !root_nx) {
 				uart.puts("Paging bring-up: physmap self-check FAILED (attributes)\n");
@@ -1341,7 +1345,7 @@ void RunPagingBringup(
 			uart.puts("Paging bring-up: higher-half stack not available; keeping low SP\n");
 		}
 
-		const std::uintptr_t continuation_low =
+		const auto continuation_low =
 			reinterpret_cast<std::uintptr_t>(&PagingBringup_HigherHalfStackContinuation);
 		const std::uintptr_t continuation_offset = continuation_low - kernel_physical_base;
 		const std::uintptr_t continuation_high = kernel_higher_half_base + continuation_offset;

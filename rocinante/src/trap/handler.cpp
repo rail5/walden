@@ -104,7 +104,7 @@ static const char* PagingAccessTypeNameOrNull(std::uint64_t exception_code) {
 	switch (exception_code) {
 		case 0x1: return "load";
 		case 0x2: return "store";
-		case 0x3: return "fetch";
+		case 0x3:
 		case 0x6: return "fetch";
 		default: return nullptr;
 	}
@@ -119,7 +119,7 @@ static Rocinante::Trap::PagingAccessType PagingAccessTypeFromExceptionCode(std::
 	switch (exception_code) {
 		case 0x1: return Rocinante::Trap::PagingAccessType::Load;
 		case 0x2: return Rocinante::Trap::PagingAccessType::Store;
-		case 0x3: return Rocinante::Trap::PagingAccessType::Fetch;
+		case 0x3:
 		case 0x6: return Rocinante::Trap::PagingAccessType::Fetch;
 		default: return Rocinante::Trap::PagingAccessType::Unknown;
 	}
@@ -202,7 +202,7 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 			.access_type = PagingAccessTypeFromExceptionCode(exception_code),
 		};
 
-		if (Rocinante::Trap::DispatchPagingFault(*tf, event) == Rocinante::Trap::PagingFaultResult::Handled) {
+		if (Rocinante::Trap::DispatchPagingFault(tf, event) == Rocinante::Trap::PagingFaultResult::Handled) {
 			return;
 		}
 	}

@@ -15,15 +15,15 @@ namespace Rocinante::Memory::KernelMappings {
 
 namespace {
 
-static bool IsPageAligned(std::uintptr_t address) {
+bool IsPageAligned(std::uintptr_t address) {
 	return (address % Rocinante::Memory::Paging::kPageSizeBytes) == 0;
 }
 
-static std::uintptr_t RoundDownToPage(std::uintptr_t address) {
+std::uintptr_t RoundDownToPage(std::uintptr_t address) {
 	return address & static_cast<std::uintptr_t>(Rocinante::Memory::Paging::kPageBaseMask);
 }
 
-static Rocinante::Optional<std::size_t> RoundUpToPageSize(std::size_t bytes) {
+Rocinante::Optional<std::size_t> RoundUpToPageSize(std::size_t bytes) {
 	if (bytes == 0) return 0;
 	const std::size_t page_size = Rocinante::Memory::Paging::kPageSizeBytes;
 	const std::size_t add = page_size - 1;

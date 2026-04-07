@@ -19,41 +19,41 @@ namespace {
 //   - CRMD.DA=1, CRMD.PG=0 => direct address translation mode
 //   - CRMD.DA=0, CRMD.PG=1 => mapped address translation mode
 namespace Csr {
-	static constexpr std::uint32_t kCurrentModeInformation = 0x0; // CSR.CRMD
-}
+	constexpr std::uint32_t kCurrentModeInformation = 0x0; // CSR.CRMD
+} // namespace Csr
 
 namespace CurrentModeInformation {
-	static constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3); // CRMD.DA
-	static constexpr std::uint64_t kPagingEnable = (1ull << 4);           // CRMD.PG
-}
+	constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3u); // CRMD.DA
+	constexpr std::uint64_t kPagingEnable = (1ull << 4u);           // CRMD.PG
+} // namespace CurrentModeInformation
 
-static inline std::uint64_t ReadCurrentModeInformation() {
+inline std::uint64_t ReadCurrentModeInformation() {
 	std::uint64_t value;
 	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(Csr::kCurrentModeInformation));
 	return value;
 }
 
-static inline bool IsMappedAddressTranslationMode() {
+inline bool IsMappedAddressTranslationMode() {
 	const std::uint64_t crmd = ReadCurrentModeInformation();
 	const bool direct_addressing = (crmd & CurrentModeInformation::kDirectAddressingEnable) != 0;
 	const bool paging = (crmd & CurrentModeInformation::kPagingEnable) != 0;
 	return (!direct_addressing) && paging;
 }
 
-static constexpr std::uintptr_t AlignDown(std::uintptr_t value, std::size_t alignment) {
+constexpr std::uintptr_t AlignDown(std::uintptr_t value, std::size_t alignment) {
 	return value & ~(static_cast<std::uintptr_t>(alignment) - 1);
 }
 
-static constexpr std::uintptr_t AlignUp(std::uintptr_t value, std::size_t alignment) {
+constexpr std::uintptr_t AlignUp(std::uintptr_t value, std::size_t alignment) {
 	return (value + (alignment - 1)) & ~(static_cast<std::uintptr_t>(alignment) - 1);
 }
 
-static constexpr bool AddOverflows(std::uintptr_t a, std::size_t b) {
+constexpr bool AddOverflows(std::uintptr_t a, std::size_t b) {
 	const std::uintptr_t sum = a + static_cast<std::uintptr_t>(b);
 	return sum < a;
 }
 
-static bool RangesOverlap(
+bool RangesOverlap(
 	std::uintptr_t a_base,
 	std::size_t a_size,
 	std::uintptr_t b_base,
@@ -94,7 +94,7 @@ std::uint8_t* PhysicalMemoryManager::_bitmap_ptr() {
 		return reinterpret_cast<std::uint8_t*>(m_bitmap_physical_base);
 	}
 
-	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const auto virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
 	const std::uintptr_t physmap_virtual =
 		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(m_bitmap_physical_base, virtual_address_bits);
 	return reinterpret_cast<std::uint8_t*>(physmap_virtual);
@@ -107,7 +107,7 @@ const std::uint8_t* PhysicalMemoryManager::_bitmap_ptr() const {
 		return reinterpret_cast<const std::uint8_t*>(m_bitmap_physical_base);
 	}
 
-	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const auto virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
 	const std::uintptr_t physmap_virtual =
 		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(m_bitmap_physical_base, virtual_address_bits);
 	return reinterpret_cast<const std::uint8_t*>(physmap_virtual);
@@ -120,7 +120,7 @@ PhysicalMemoryManager::PageFrameMetadata* PhysicalMemoryManager::_frame_metadata
 		return reinterpret_cast<PageFrameMetadata*>(m_frame_metadata_physical_base);
 	}
 
-	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const auto virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
 	const std::uintptr_t physmap_virtual =
 		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(m_frame_metadata_physical_base, virtual_address_bits);
 	return reinterpret_cast<PageFrameMetadata*>(physmap_virtual);
@@ -133,7 +133,7 @@ const PhysicalMemoryManager::PageFrameMetadata* PhysicalMemoryManager::_frame_me
 		return reinterpret_cast<const PageFrameMetadata*>(m_frame_metadata_physical_base);
 	}
 
-	const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+	const auto virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
 	const std::uintptr_t physmap_virtual =
 		Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(m_frame_metadata_physical_base, virtual_address_bits);
 	return reinterpret_cast<const PageFrameMetadata*>(physmap_virtual);
@@ -182,7 +182,7 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 		if (r.size_bytes == 0) continue;
 		if (AddOverflows(static_cast<std::uintptr_t>(r.physical_base), static_cast<std::size_t>(r.size_bytes))) continue;
 
-		const std::uintptr_t region_begin = static_cast<std::uintptr_t>(r.physical_base);
+		const auto region_begin = static_cast<std::uintptr_t>(r.physical_base);
 		std::uintptr_t region_end = region_begin + static_cast<std::uintptr_t>(r.size_bytes);
 		if (palen_valid) {
 			if (region_begin >= max_physical_exclusive) continue;
@@ -208,7 +208,7 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 
 			bool bumped = false;
 			if (kernel_physical_end > kernel_physical_base) {
-				const std::size_t kernel_size = static_cast<std::size_t>(kernel_physical_end - kernel_physical_base);
+				const auto kernel_size = static_cast<std::size_t>(kernel_physical_end - kernel_physical_base);
 				if (RangesOverlap(candidate, bitmap_alloc_size_bytes, kernel_physical_base, kernel_size)) {
 					std::uintptr_t bump_end = kernel_physical_end;
 					if (palen_valid && bump_end > max_physical_exclusive) bump_end = max_physical_exclusive;
@@ -240,9 +240,9 @@ bool PhysicalMemoryManager::_allocate_bitmap(
 					if (rr.size_bytes == 0) continue;
 					if (AddOverflows(static_cast<std::uintptr_t>(rr.physical_base), static_cast<std::size_t>(rr.size_bytes))) continue;
 
-					const std::uintptr_t reserved_begin = static_cast<std::uintptr_t>(rr.physical_base);
-					const std::uintptr_t reserved_end = reserved_begin + static_cast<std::uintptr_t>(rr.size_bytes);
-					const std::size_t reserved_size = static_cast<std::size_t>(reserved_end - reserved_begin);
+					const auto reserved_begin = static_cast<std::uintptr_t>(rr.physical_base);
+					const auto reserved_end = reserved_begin + static_cast<std::uintptr_t>(rr.size_bytes);
+					const auto reserved_size = static_cast<std::size_t>(reserved_end - reserved_begin);
 
 					if (RangesOverlap(candidate, bitmap_alloc_size_bytes, reserved_begin, reserved_size)) {
 						std::uintptr_t bump_end = reserved_end;
@@ -310,7 +310,7 @@ bool PhysicalMemoryManager::_allocate_frame_metadata(
 		if (r.size_bytes == 0) continue;
 		if (AddOverflows(static_cast<std::uintptr_t>(r.physical_base), static_cast<std::size_t>(r.size_bytes))) continue;
 
-		const std::uintptr_t region_begin = static_cast<std::uintptr_t>(r.physical_base);
+		const auto region_begin = static_cast<std::uintptr_t>(r.physical_base);
 		std::uintptr_t region_end = region_begin + static_cast<std::uintptr_t>(r.size_bytes);
 		if (palen_valid) {
 			if (region_begin >= max_physical_exclusive) continue;
@@ -332,7 +332,7 @@ bool PhysicalMemoryManager::_allocate_frame_metadata(
 
 			bool bumped = false;
 			if (kernel_physical_end > kernel_physical_base) {
-				const std::size_t kernel_size = static_cast<std::size_t>(kernel_physical_end - kernel_physical_base);
+				const auto kernel_size = static_cast<std::size_t>(kernel_physical_end - kernel_physical_base);
 				if (RangesOverlap(candidate, metadata_alloc_size_bytes, kernel_physical_base, kernel_size)) {
 					std::uintptr_t bump_end = kernel_physical_end;
 					if (palen_valid && bump_end > max_physical_exclusive) bump_end = max_physical_exclusive;
@@ -370,9 +370,9 @@ bool PhysicalMemoryManager::_allocate_frame_metadata(
 					if (rr.size_bytes == 0) continue;
 					if (AddOverflows(static_cast<std::uintptr_t>(rr.physical_base), static_cast<std::size_t>(rr.size_bytes))) continue;
 
-					const std::uintptr_t reserved_begin = static_cast<std::uintptr_t>(rr.physical_base);
-					const std::uintptr_t reserved_end = reserved_begin + static_cast<std::uintptr_t>(rr.size_bytes);
-					const std::size_t reserved_size = static_cast<std::size_t>(reserved_end - reserved_begin);
+					const auto reserved_begin = static_cast<std::uintptr_t>(rr.physical_base);
+					const auto reserved_end = reserved_begin + static_cast<std::uintptr_t>(rr.size_bytes);
+					const auto reserved_size = static_cast<std::size_t>(reserved_end - reserved_begin);
 
 					if (RangesOverlap(candidate, metadata_alloc_size_bytes, reserved_begin, reserved_size)) {
 						std::uintptr_t bump_end = reserved_end;
@@ -516,8 +516,8 @@ bool PhysicalMemoryManager::InitializeFromBootMemoryMap(
 		if (r.size_bytes == 0) continue;
 		if (AddOverflows(static_cast<std::uintptr_t>(r.physical_base), static_cast<std::size_t>(r.size_bytes))) continue;
 
-		const std::uintptr_t begin = static_cast<std::uintptr_t>(r.physical_base);
-		const std::uintptr_t end = begin + static_cast<std::uintptr_t>(r.size_bytes);
+		const auto begin = static_cast<std::uintptr_t>(r.physical_base);
+		const auto end = begin + static_cast<std::uintptr_t>(r.size_bytes);
 
 		if (!saw_usable) {
 			usable_min = begin;

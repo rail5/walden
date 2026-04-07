@@ -72,7 +72,7 @@ static std::uint64_t g_paging_hw_nx_expected_bad_virtual_address_masked = 0;
 static std::uint64_t g_paging_hw_nx_resume_exception_return_address = 0;
 
 static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestNxFetch_RaisesPnx(
-	Rocinante::TrapFrame& tf,
+	Rocinante::TrapFrame* tf,
 	const Rocinante::Trap::PagingFaultEvent& event
 ) {
 	// Spec anchor (LoongArch-Vol1-EN.html):
@@ -98,7 +98,7 @@ static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestNxFetch_Raises
 	// - Using $ra (r1) is fragile if the trapframe doesn't reliably preserve it
 	//   across all exception types/emulator behaviors.
 	if (g_paging_hw_nx_resume_exception_return_address != 0) {
-		tf.exception_return_address = g_paging_hw_nx_resume_exception_return_address;
+		tf->exception_return_address = g_paging_hw_nx_resume_exception_return_address;
 		return Rocinante::Trap::PagingFaultResult::Handled;
 	}
 
@@ -111,12 +111,12 @@ static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestNxFetch_Raises
 	//
 	// TrapFrame contract: general_purpose_registers[i] corresponds to GPR r{i}.
 	static constexpr std::size_t kRegisterRa = 1;
-	tf.exception_return_address = tf.general_purpose_registers[kRegisterRa];
+	tf->exception_return_address = tf->general_purpose_registers[kRegisterRa];
 	return Rocinante::Trap::PagingFaultResult::Handled;
 }
 
 static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestProbe(
-	Rocinante::TrapFrame& tf,
+	Rocinante::TrapFrame* tf,
 	const Rocinante::Trap::PagingFaultEvent& event
 ) {
 	// Record observation for the test to assert after returning.
@@ -135,12 +135,12 @@ static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestProbe(
 	// Handle by skipping the faulting instruction.
 	// LoongArch instructions are 32-bit.
 	static constexpr std::uint64_t kInstructionSizeBytes = 4;
-	tf.exception_return_address += kInstructionSizeBytes;
+	tf->exception_return_address += kInstructionSizeBytes;
 	return Rocinante::Trap::PagingFaultResult::Handled;
 }
 
 static Rocinante::Trap::PagingFaultResult PagingFaultObserver_TestPagerMapAndRetry(
-	Rocinante::TrapFrame& tf,
+	Rocinante::TrapFrame* tf,
 	const Rocinante::Trap::PagingFaultEvent& event
 ) {
 	(void)tf;

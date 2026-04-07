@@ -50,7 +50,7 @@ extern void* __dso_handle;
 
 int __cxa_guard_acquire(std::uint64_t* guard);
 void __cxa_guard_release(std::uint64_t* guard);
-void __cxa_guard_abort(std::uint64_t* guard);
+void __cxa_guard_abort(const std::uint64_t* guard);
 
 [[noreturn]] void __cxa_pure_virtual();
 
@@ -95,7 +95,7 @@ int __cxa_atexit(void (*destructor)(void*), void* arg, void* dso_handle) {
 
 // The runtime expects this symbol to exist if __cxa_atexit is referenced.
 // Any unique address is fine; using the variable address itself is apparently typical.
-void* __dso_handle = &__dso_handle;
+void* __dso_handle = static_cast<void*>(&__dso_handle);
 
 // ---------------------------------------------------------------------------
 // Guard variables for function-local statics
@@ -127,7 +127,7 @@ void __cxa_guard_release(std::uint64_t* guard) {
 	*flag = 1;
 }
 
-void __cxa_guard_abort(std::uint64_t* guard) {
+void __cxa_guard_abort(const std::uint64_t* guard) {
 	// If init fails, the ABI would normally reset the guard so init may be
 	// retried. With exceptions disabled, we just leave it uninitialized.
 	(void)guard;
@@ -147,7 +147,7 @@ void __cxa_pure_virtual() {
 
 void* memset(void* destination, int byte_value, std::size_t byte_count) {
 	auto* dst = static_cast<std::uint8_t*>(destination);
-	const std::uint8_t value = static_cast<std::uint8_t>(byte_value);
+	const auto value = static_cast<std::uint8_t>(byte_value);
 	for (std::size_t i = 0; i < byte_count; i++) {
 		dst[i] = value;
 	}
@@ -156,7 +156,7 @@ void* memset(void* destination, int byte_value, std::size_t byte_count) {
 
 void* memcpy(void* destination, const void* source, std::size_t byte_count) {
 	auto* dst = static_cast<std::uint8_t*>(destination);
-	auto* src = static_cast<const std::uint8_t*>(source);
+	const auto* src = static_cast<const std::uint8_t*>(source);
 	for (std::size_t i = 0; i < byte_count; i++) {
 		dst[i] = src[i];
 	}
@@ -165,7 +165,7 @@ void* memcpy(void* destination, const void* source, std::size_t byte_count) {
 
 void* memmove(void* destination, const void* source, std::size_t byte_count) {
 	auto* dst = static_cast<std::uint8_t*>(destination);
-	auto* src = static_cast<const std::uint8_t*>(source);
+	const auto* src = static_cast<const std::uint8_t*>(source);
 	if (dst == src || byte_count == 0) return destination;
 
 	if (dst < src) {
@@ -182,8 +182,8 @@ void* memmove(void* destination, const void* source, std::size_t byte_count) {
 }
 
 int memcmp(const void* a, const void* b, std::size_t byte_count) {
-	auto* p = static_cast<const std::uint8_t*>(a);
-	auto* q = static_cast<const std::uint8_t*>(b);
+	const auto* p = static_cast<const std::uint8_t*>(a);
+	const auto* q = static_cast<const std::uint8_t*>(b);
 	for (std::size_t i = 0; i < byte_count; i++) {
 		if (p[i] == q[i]) continue;
 		return (p[i] < q[i]) ? -1 : 1;
@@ -236,7 +236,7 @@ void* operator new(std::size_t size) {
 	OutOfMemorySpin();
 }
 
-void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+void* operator new(std::size_t size, const std::nothrow_t& /*unused*/) noexcept {
 	return Rocinante::Memory::Heap::Alloc(size);
 }
 
@@ -246,28 +246,28 @@ void* operator new[](std::size_t size) {
 	OutOfMemorySpin();
 }
 
-void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+void* operator new[](std::size_t size, const std::nothrow_t& /*unused*/) noexcept {
 	return Rocinante::Memory::Heap::Alloc(size);
 }
 
 // ---- aligned operator new (over-aligned types) ----
 void* operator new(std::size_t size, std::align_val_t align) {
-	const std::size_t alignment = static_cast<std::size_t>(align);
+	const auto alignment = static_cast<std::size_t>(align);
 	if (void* p = Rocinante::Memory::Heap::Alloc(size, alignment)) return p;
 	OutOfMemorySpin();
 }
 
-void* operator new(std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
+void* operator new(std::size_t size, std::align_val_t align, const std::nothrow_t& /*unused*/) noexcept {
 	return Rocinante::Memory::Heap::Alloc(size, static_cast<std::size_t>(align));
 }
 
 void* operator new[](std::size_t size, std::align_val_t align) {
-	const std::size_t alignment = static_cast<std::size_t>(align);
+	const auto alignment = static_cast<std::size_t>(align);
 	if (void* p = Rocinante::Memory::Heap::Alloc(size, alignment)) return p;
 	OutOfMemorySpin();
 }
 
-void* operator new[](std::size_t size, std::align_val_t align, const std::nothrow_t&) noexcept {
+void* operator new[](std::size_t size, std::align_val_t align, const std::nothrow_t& /*unused*/) noexcept {
 	return Rocinante::Memory::Heap::Alloc(size, static_cast<std::size_t>(align));
 }
 
@@ -281,27 +281,27 @@ void operator delete[](void* ptr) noexcept {
 }
 
 // Sized delete (the compiler may emit calls to these in C++14+).
-void operator delete(void* ptr, std::size_t) noexcept {
+void operator delete(void* ptr, std::size_t /*size*/) noexcept {
 	Rocinante::Memory::Heap::Free(ptr);
 }
 
-void operator delete[](void* ptr, std::size_t) noexcept {
+void operator delete[](void* ptr, std::size_t /*size*/) noexcept {
 	Rocinante::Memory::Heap::Free(ptr);
 }
 
 // Aligned delete.
-void operator delete(void* ptr, std::align_val_t) noexcept {
+void operator delete(void* ptr, std::align_val_t /*align*/) noexcept {
 	Rocinante::Memory::Heap::Free(ptr);
 }
 
-void operator delete[](void* ptr, std::align_val_t) noexcept {
+void operator delete[](void* ptr, std::align_val_t /*align*/) noexcept {
 	Rocinante::Memory::Heap::Free(ptr);
 }
 
-void operator delete(void* ptr, std::size_t, std::align_val_t) noexcept {
+void operator delete(void* ptr, std::size_t /*size*/, std::align_val_t /*align*/) noexcept {
 	Rocinante::Memory::Heap::Free(ptr);
 }
 
-void operator delete[](void* ptr, std::size_t, std::align_val_t) noexcept {
+void operator delete[](void* ptr, std::size_t /*size*/, std::align_val_t /*align*/) noexcept {
 	Rocinante::Memory::Heap::Free(ptr);
 }

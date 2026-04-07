@@ -15,11 +15,11 @@ namespace Rocinante::Memory {
 
 namespace {
 
-static bool g_inited = false;
-static AddressLimits g_limits{};
-static std::uintptr_t g_recommended_heap_base = 0;
+bool g_inited = false;
+AddressLimits g_limits{};
+std::uintptr_t g_recommended_heap_base = 0;
 
-static constexpr std::uintptr_t AlignUp(std::uintptr_t value, std::size_t alignment) {
+constexpr std::uintptr_t AlignUp(std::uintptr_t value, std::size_t alignment) {
 	// Align `value` up to the next multiple of `alignment`.
 	//
 	// NOTE: For current uses (heap base alignment) `alignment` is a small constant
@@ -31,7 +31,7 @@ static constexpr std::uintptr_t AlignUp(std::uintptr_t value, std::size_t alignm
 	return value + (alignment - remainder);
 }
 
-static std::uint64_t MaxForWidth(std::uint32_t width_bits) {
+std::uint64_t MaxForWidth(std::uint32_t width_bits) {
 	// This code path assumes CPUCFG-reported address widths are within the range
 	// our masks can represent.
 	// If a future CPU reports 64, "2^64 - 1" would overflow; treat it as all-ones.

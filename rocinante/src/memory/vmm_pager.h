@@ -25,7 +25,7 @@ void ConfigureKernelVirtualMemoryAreas(const VirtualMemoryAreaSet* areas);
 // - Uses per-page TLB invalidation for the active ASID after successful mapping.
 // - If the mapping is global (G=1), it also invalidates global TLB entries.
 Rocinante::Trap::PagingFaultResult PagingFaultObserver(
-	Rocinante::TrapFrame& tf,
+	Rocinante::TrapFrame* tf,
 	const Rocinante::Trap::PagingFaultEvent& event
 );
 

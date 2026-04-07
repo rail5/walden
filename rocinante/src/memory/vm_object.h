@@ -40,8 +40,11 @@ class AnonymousVmObject final {
 		};
 
 		AnonymousVmObject() = default;
+		~AnonymousVmObject() = default;
 		AnonymousVmObject(const AnonymousVmObject&) = delete;
 		AnonymousVmObject& operator=(const AnonymousVmObject&) = delete;
+		AnonymousVmObject(AnonymousVmObject&&) = delete;
+		AnonymousVmObject& operator=(AnonymousVmObject&&) = delete;
 
 		std::size_t PageCount() const { return m_payload_frame_count; }
 		bool IsEmpty() const { return m_payload_frame_count == 0; }
@@ -261,17 +264,17 @@ class AnonymousVmObject final {
 		};
 
 		struct CurrentModeInformation final {
-			static constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3); // CRMD.DA
-			static constexpr std::uint64_t kPagingEnable = (1ull << 4);           // CRMD.PG
+			static constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3u); // CRMD.DA
+			static constexpr std::uint64_t kPagingEnable = (1ull << 4u);           // CRMD.PG
 		};
 
-		static inline std::uint64_t ReadCurrentModeInformation() {
+		static std::uint64_t ReadCurrentModeInformation() {
 			std::uint64_t value;
 			asm volatile("csrrd %0, %1" : "=r"(value) : "i"(Csr::kCurrentModeInformation));
 			return value;
 		}
 
-		static inline bool IsMappedAddressTranslationMode() {
+		static bool IsMappedAddressTranslationMode() {
 			const std::uint64_t crmd = ReadCurrentModeInformation();
 			const bool direct_addressing = (crmd & CurrentModeInformation::kDirectAddressingEnable) != 0;
 			const bool paging = (crmd & CurrentModeInformation::kPagingEnable) != 0;
@@ -283,7 +286,7 @@ class AnonymousVmObject final {
 			if (!IsMappedAddressTranslationMode()) {
 				return reinterpret_cast<RadixPage*>(physical_page_base);
 			}
-			const std::uint8_t virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
+			const auto virtual_address_bits = static_cast<std::uint8_t>(Rocinante::GetCPUCFG().VirtualAddressBits());
 			const std::uintptr_t physmap_virtual =
 				Rocinante::Memory::VirtualLayout::ToPhysMapVirtual(physical_page_base, virtual_address_bits);
 			return reinterpret_cast<RadixPage*>(physmap_virtual);

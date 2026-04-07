@@ -95,8 +95,11 @@ class VirtualMemoryAreaSet final
 		&VirtualMemoryArea::virtual_base> {
 public:
 	VirtualMemoryAreaSet() = default;
+	~VirtualMemoryAreaSet() = default;
 	VirtualMemoryAreaSet(const VirtualMemoryAreaSet&) = delete;
 	VirtualMemoryAreaSet& operator=(const VirtualMemoryAreaSet&) = delete;
+	VirtualMemoryAreaSet(VirtualMemoryAreaSet&&) = delete;
+	VirtualMemoryAreaSet& operator=(VirtualMemoryAreaSet&&) = delete;
 
 	std::size_t AreaCount() const { return NodeCount(); }
 

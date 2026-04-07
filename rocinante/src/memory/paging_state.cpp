@@ -11,8 +11,8 @@ namespace Rocinante::Memory {
 
 namespace {
 
-static bool g_paging_state_initialized = false;
-static Rocinante::Memory::PagingState g_paging_state{};
+bool g_paging_state_initialized = false;
+Rocinante::Memory::PagingState g_paging_state{};
 
 } // namespace
 

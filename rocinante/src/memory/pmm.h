@@ -45,8 +45,11 @@ class PhysicalMemoryManager final {
 		static constexpr std::size_t kPageFrameMetadataSizeBytes = 16;
 
 		PhysicalMemoryManager() = default;
+		~PhysicalMemoryManager() = default;
 		PhysicalMemoryManager(const PhysicalMemoryManager&) = delete;
 		PhysicalMemoryManager& operator=(const PhysicalMemoryManager&) = delete;
+		PhysicalMemoryManager(PhysicalMemoryManager&&) = delete;
+		PhysicalMemoryManager& operator=(PhysicalMemoryManager&&) = delete;
 
 		bool IsInitialized() const { return m_initialized; }
 

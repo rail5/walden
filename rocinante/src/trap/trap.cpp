@@ -98,7 +98,7 @@ void SetPagingFaultObserver(PagingFaultObserver observer) {
 	g_paging_fault_observer = observer;
 }
 
-PagingFaultResult DispatchPagingFault(TrapFrame& tf, const PagingFaultEvent& event) {
+PagingFaultResult DispatchPagingFault(TrapFrame* tf, const PagingFaultEvent& event) {
 	if (g_paging_fault_observer == nullptr) return PagingFaultResult::NotHandled;
 	return g_paging_fault_observer(tf, event);
 }

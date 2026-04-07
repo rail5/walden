@@ -25,7 +25,7 @@ namespace {
 extern "C" char _start;
 extern "C" char _end;
 
-static void PrintCpuArchitecture(const Rocinante::Uart16550& uart, Rocinante::CPUCFG::Architecture arch) {
+void PrintCpuArchitecture(const Rocinante::Uart16550& uart, Rocinante::CPUCFG::Architecture arch) {
 	uart.puts("CPU Architecture: ");
 	if (arch == Rocinante::CPUCFG::Architecture::SimplifiedLA32) {
 		uart.putc('S');
@@ -82,7 +82,7 @@ static void PrintCpuArchitecture(const Rocinante::Uart16550& uart, Rocinante::CP
 	uart.putc('\n');
 }
 
-[[noreturn]] static void KernelMain_PostMemoryInitialization() {
+[[noreturn]] void KernelMain_PostMemoryInitialization() {
 	auto& uart = Rocinante::Platform::GetEarlyUart();
 	auto& cpucfg = Rocinante::GetCPUCFG();
 
@@ -193,7 +193,7 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 	}
 
 	if (maybe_device_tree_blob) {
-		const std::uintptr_t device_tree_physical_base = reinterpret_cast<std::uintptr_t>(maybe_device_tree_blob);
+		const auto device_tree_physical_base = reinterpret_cast<std::uintptr_t>(maybe_device_tree_blob);
 		const std::size_t device_tree_size_bytes = Rocinante::Memory::BootMemoryMap::DeviceTreeTotalSizeBytesOrZero(maybe_device_tree_blob);
 		uart.puts("DTB detected: base=");
 		uart.write_dec_u64(device_tree_physical_base);
@@ -207,8 +207,8 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 		if (boot_map.TryParseFromDeviceTree(maybe_device_tree_blob)) {
 			Rocinante::Boot::PrintBootMemoryMap(uart, boot_map);
 
-			const std::uintptr_t kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
-			const std::uintptr_t kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
+			const auto kernel_physical_base = reinterpret_cast<std::uintptr_t>(&_start);
+			const auto kernel_physical_end = reinterpret_cast<std::uintptr_t>(&_end);
 
 			auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();
 			if (pmm.InitializeFromBootMemoryMap(
@@ -228,7 +228,7 @@ extern "C" [[noreturn]] void kernel_main(std::uint64_t is_uefi_compliant_bootenv
 				// - Jump to the higher-half alias and continue normal kernel execution.
 				Rocinante::Kernel::RunPagingBringup(
 					uart,
-					pmm,
+					&pmm,
 					kernel_physical_base,
 					kernel_physical_end,
 					&KernelMain_PostMemoryInitialization

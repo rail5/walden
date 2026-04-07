@@ -5,6 +5,8 @@
 
 #include "heap.h"
 
+#include <cstdint>
+
 namespace Rocinante::Memory::Heap {
 
 // -----------------------------
@@ -58,32 +60,32 @@ constexpr std::size_t FreeNodeSize = sizeof(FreeNode);
 constexpr std::size_t MinFreeBlockSize =
 	((HeaderSize + FreeNodeSize + FooterSize + (kHeapAlign - 1)) & ~kFlagMask);
 
-static std::uint8_t* g_heap_begin = nullptr;
-static std::uint8_t* g_heap_end = nullptr;
-static FreeNode* g_free_list_head = nullptr;
-static bool g_initialized = false;
+std::uint8_t* g_heap_begin = nullptr;
+std::uint8_t* g_heap_end = nullptr;
+FreeNode* g_free_list_head = nullptr;
+bool g_initialized = false;
 
-static constexpr std::uintptr_t AlignUp(std::uintptr_t value, std::size_t alignment) {
+constexpr std::uintptr_t AlignUp(std::uintptr_t value, std::size_t alignment) {
 	return (value + (alignment - 1)) & ~(static_cast<std::uintptr_t>(alignment) - 1);
 }
 
-static constexpr std::size_t RoundUp(std::size_t value, std::size_t alignment) {
+constexpr std::size_t RoundUp(std::size_t value, std::size_t alignment) {
 	return (value + (alignment - 1)) & ~(alignment - 1);
 }
 
-static bool IsPowerOfTwo(std::size_t x) {
+bool IsPowerOfTwo(std::size_t x) {
 	return x && ((x & (x - 1)) == 0);
 }
 
-static std::size_t BlockSize(const BlockHeader* header) {
+std::size_t BlockSize(const BlockHeader* header) {
 	return header->SizeAndFlags & ~kFlagMask;
 }
 
-static bool IsUsed(const BlockHeader* header) {
+bool IsUsed(const BlockHeader* header) {
 	return (header->SizeAndFlags & kUsedFlag) != 0;
 }
 
-static void SetHeaderAndFooter(BlockHeader* header, std::size_t size_bytes, bool used) {
+void SetHeaderAndFooter(BlockHeader* header, std::size_t size_bytes, bool used) {
 	// size_bytes must be aligned to kHeapAlign.
 	const std::size_t flags = used ? kUsedFlag : 0;
 	header->SizeAndFlags = size_bytes | flags;
@@ -92,26 +94,26 @@ static void SetHeaderAndFooter(BlockHeader* header, std::size_t size_bytes, bool
 	*footer = header->SizeAndFlags;
 }
 
-static BlockHeader* NextBlock(BlockHeader* header) {
+BlockHeader* NextBlock(BlockHeader* header) {
 	return reinterpret_cast<BlockHeader*>(reinterpret_cast<std::uint8_t*>(header) + BlockSize(header));
 }
 
-static BlockHeader* PrevBlock(BlockHeader* header) {
+BlockHeader* PrevBlock(BlockHeader* header) {
 	// Previous block's footer is immediately before this block's header.
 	auto* prev_footer = reinterpret_cast<BlockFooter*>(reinterpret_cast<std::uint8_t*>(header) - FooterSize);
 	const std::size_t prev_size = (*prev_footer) & ~kFlagMask;
 	return reinterpret_cast<BlockHeader*>(reinterpret_cast<std::uint8_t*>(header) - prev_size);
 }
 
-static FreeNode* NodeFor(BlockHeader* header) {
+FreeNode* NodeFor(BlockHeader* header) {
 	return reinterpret_cast<FreeNode*>(reinterpret_cast<std::uint8_t*>(header) + HeaderSize);
 }
 
-static BlockHeader* HeaderFor(FreeNode* node) {
+BlockHeader* HeaderFor(FreeNode* node) {
 	return reinterpret_cast<BlockHeader*>(reinterpret_cast<std::uint8_t*>(node) - HeaderSize);
 }
 
-static void FreeListRemove(FreeNode* node) {
+void FreeListRemove(FreeNode* node) {
 	if (node->Prev) {
 		node->Prev->Next = node->Next;
 	} else {
@@ -124,7 +126,7 @@ static void FreeListRemove(FreeNode* node) {
 	node->Prev = nullptr;
 }
 
-static void FreeListInsertFront(FreeNode* node) {
+void FreeListInsertFront(FreeNode* node) {
 	node->Prev = nullptr;
 	node->Next = g_free_list_head;
 	if (g_free_list_head) g_free_list_head->Prev = node;
@@ -139,11 +141,11 @@ bool IsInitialized() {
 
 void Init(void* heap_start, std::size_t heap_size_bytes) {
 	// Align the heap start up, and shrink the size accordingly.
-	std::uintptr_t begin = reinterpret_cast<std::uintptr_t>(heap_start);
+	auto begin = reinterpret_cast<std::uintptr_t>(heap_start);
 	std::uintptr_t aligned_begin = AlignUp(begin, kHeapAlign);
 
 	if (aligned_begin > begin) {
-		const std::size_t delta = static_cast<std::size_t>(aligned_begin - begin);
+		const auto delta = static_cast<std::size_t>(aligned_begin - begin);
 		if (heap_size_bytes <= delta) {
 			// Not enough space.
 			g_initialized = false;
@@ -195,15 +197,15 @@ void* Alloc(std::size_t size, std::size_t alignment) {
 
 		// Try to place an allocated block inside this free block so that the
 		// returned payload pointer meets `alignment`.
-		std::uint8_t* block_begin = reinterpret_cast<std::uint8_t*>(free_block);
+		auto* block_begin = reinterpret_cast<std::uint8_t*>(free_block);
 		std::uint8_t* block_end = block_begin + free_size;
 
 		// We want:
 		//   payload = alloc_header + HeaderSize
 		// to be aligned.
-		std::uintptr_t payload_begin = reinterpret_cast<std::uintptr_t>(block_begin + HeaderSize);
+		auto payload_begin = reinterpret_cast<std::uintptr_t>(block_begin + HeaderSize);
 		std::uintptr_t payload_aligned = AlignUp(payload_begin, alignment);
-		std::uint8_t* alloc_header_begin = reinterpret_cast<std::uint8_t*>(payload_aligned - HeaderSize);
+		auto* alloc_header_begin = reinterpret_cast<std::uint8_t*>(payload_aligned - HeaderSize);
 
 		// If the prefix is too small to be its own free block, bump by alignment
 		// until it is (or until it no longer fits).
@@ -214,7 +216,7 @@ void* Alloc(std::size_t size, std::size_t alignment) {
 			if (alloc_header_begin + block_needed > block_end) break;
 		}
 
-		const std::size_t prefix = static_cast<std::size_t>(alloc_header_begin - block_begin);
+		const auto prefix = static_cast<std::size_t>(alloc_header_begin - block_begin);
 		if (alloc_header_begin + block_needed > block_end) continue;
 
 		// Success: remove this free block from the free list and split it into:
@@ -234,7 +236,7 @@ void* Alloc(std::size_t size, std::size_t alignment) {
 
 		// Suffix free block
 		std::uint8_t* suffix_begin = alloc_header_begin + block_needed;
-		const std::size_t suffix = static_cast<std::size_t>(block_end - suffix_begin);
+		const auto suffix = static_cast<std::size_t>(block_end - suffix_begin);
 		if (suffix >= MinFreeBlockSize) {
 			auto* suffix_header = reinterpret_cast<BlockHeader*>(suffix_begin);
 			SetHeaderAndFooter(suffix_header, suffix, /*used=*/false);

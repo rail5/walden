@@ -28,7 +28,7 @@ bool UnmapVma4KiB(
 	std::uintptr_t unmapped_bytes = 0;
 	while (unmapped_bytes < size_bytes) {
 		const std::uintptr_t virtual_page = virtual_base + unmapped_bytes;
-		const std::size_t page_offset = static_cast<std::size_t>(unmapped_bytes / Paging::kPageSizeBytes);
+		const auto page_offset = static_cast<std::size_t>(unmapped_bytes / Paging::kPageSizeBytes);
 
 		const auto translated = Paging::Translate(root, virtual_page);
 		if (translated.has_value()) {
@@ -38,9 +38,7 @@ bool UnmapVma4KiB(
 		}
 
 		if (vma.owns_frames) {
-			if (vma.backing_type != VirtualMemoryArea::BackingType::Anonymous) {
-				ok = false;
-			} else if (!vma.anonymous_object) {
+			if (vma.backing_type != VirtualMemoryArea::BackingType::Anonymous || !vma.anonymous_object) {
 				ok = false;
 			} else {
 				// Policy note:

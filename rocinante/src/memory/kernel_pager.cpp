@@ -20,30 +20,29 @@
 
 namespace {
 
-static Rocinante::Memory::KernelPager::LazyMappingRegion g_lazy_region{};
-static bool g_installed = false;
+Rocinante::Memory::KernelPager::LazyMappingRegion g_lazy_region{};
+bool g_installed = false;
 
-static bool IsPageAligned(std::uintptr_t address) {
+bool IsPageAligned(std::uintptr_t address) {
 	return (address % Rocinante::Memory::Paging::kPageSizeBytes) == 0;
 }
 
-static bool IsValidLazyRegion(const Rocinante::Memory::KernelPager::LazyMappingRegion& region) {
+bool IsValidLazyRegion(const Rocinante::Memory::KernelPager::LazyMappingRegion& region) {
 	if (region.virtual_base == 0) return false;
 	if (region.size_bytes == 0) return false;
 	if (!IsPageAligned(region.virtual_base)) return false;
 	if ((region.size_bytes % Rocinante::Memory::Paging::kPageSizeBytes) != 0) return false;
 	const std::uintptr_t limit = region.virtual_base + static_cast<std::uintptr_t>(region.size_bytes);
-	if (limit < region.virtual_base) return false;
-	return true;
+	return (limit >= region.virtual_base);
 }
 
-static bool LazyRegionContainsVirtualPageBase(std::uintptr_t virtual_page_base) {
+bool LazyRegionContainsVirtualPageBase(std::uintptr_t virtual_page_base) {
 	if (!IsValidLazyRegion(g_lazy_region)) return false;
 	const std::uintptr_t limit = g_lazy_region.virtual_base + static_cast<std::uintptr_t>(g_lazy_region.size_bytes);
 	return virtual_page_base >= g_lazy_region.virtual_base && virtual_page_base < limit;
 }
 
-static const char* PagingExceptionNameOrNull(std::uint64_t exception_code) {
+const char* PagingExceptionNameOrNull(std::uint64_t exception_code) {
 	// LoongArch-Vol1-EN.html:
 	// - Table 21 (exception encoding) and Section 5.4.3.1 (TLB-related exceptions).
 	switch (exception_code) {
@@ -58,8 +57,8 @@ static const char* PagingExceptionNameOrNull(std::uint64_t exception_code) {
 	}
 }
 
-static Rocinante::Trap::PagingFaultResult KernelPagerPagingFaultObserver(
-	Rocinante::TrapFrame& tf,
+Rocinante::Trap::PagingFaultResult KernelPagerPagingFaultObserver(
+	Rocinante::TrapFrame* tf,
 	const Rocinante::Trap::PagingFaultEvent& event
 ) {
 	(void)tf;

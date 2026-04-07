@@ -15,16 +15,16 @@ namespace Csr {
 	constexpr std::uint32_t kPgdHigh = 0x1a;              // CSR.PGDH
 	constexpr std::uint32_t kPageWalkControlLow = 0x1c;   // CSR.PWCL
 	constexpr std::uint32_t kPageWalkControlHigh = 0x1d;  // CSR.PWCH
-}
+} // namespace Csr
 
 namespace AddressSpaceId {
 	// Spec anchor (LoongArch-Vol1-EN.html):
 	// - Vol.1 Section 7.5.4 (ASID), Table 38:
 	//   - CSR.ASID.ASID is bits [9:0]
-	static constexpr std::uint64_t kAsidMask = 0x3ff;
-}
+	constexpr std::uint64_t kAsidMask = 0x3ff;
+} // namespace AddressSpaceId
 
-static inline std::uint64_t InvtlbAsidOperand(std::uint16_t address_space_id) {
+inline std::uint64_t InvtlbAsidOperand(std::uint16_t address_space_id) {
 	// LoongArch-Vol1-EN.html, Section 4.2.4.7 (INVTLB):
 	// rj[9:0] holds ASID and the remaining bits must be 0.
 	return static_cast<std::uint64_t>(address_space_id) & AddressSpaceId::kAsidMask;
@@ -32,9 +32,9 @@ static inline std::uint64_t InvtlbAsidOperand(std::uint16_t address_space_id) {
 
 namespace CurrentModeInformation {
 	// CRMD.PG (bit 4): enable paging.
-	constexpr std::uint64_t kPagingEnable = (1ull << 4);
+	constexpr std::uint64_t kPagingEnable = (1ull << 4u);
 	// CRMD.DA (bit 3): direct addressing enable.
-	constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3);
+	constexpr std::uint64_t kDirectAddressingEnable = (1ull << 3u);
 
 	// CRMD.DATF (bits 6:5): direct addressing translation mode for fetch.
 	constexpr std::uint64_t kDirectTranslationFetchShift = 5;
@@ -48,13 +48,13 @@ namespace CurrentModeInformation {
 	constexpr std::uint64_t kDirectTranslationConsistentCacheable = 0b01;
 } // namespace CurrentModeInformation
 
-static inline std::uint64_t ReadCsr(std::uint32_t csr) {
+inline std::uint64_t ReadCsr(std::uint32_t csr) {
 	std::uint64_t value;
 	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(csr));
 	return value;
 }
 
-static inline void WriteCsr(std::uint32_t csr, std::uint64_t value) {
+inline void WriteCsr(std::uint32_t csr, std::uint64_t value) {
 	asm volatile("csrwr %0, %1" :: "r"(value), "i"(csr));
 }
 
@@ -151,14 +151,14 @@ Rocinante::Optional<PageWalkerConfig> Make4KiBPageWalkerConfig(Paging::AddressSp
 	// - [31:30] PTEWidth (0 => 64-bit entries)
 	std::uint64_t pwcl = 0;
 	pwcl |= static_cast<std::uint64_t>(bases[0] & 0x1Fu);
-	pwcl |= static_cast<std::uint64_t>(widths[0] & 0x1Fu) << 5;
+	pwcl |= static_cast<std::uint64_t>(widths[0] & 0x1Fu) << 5u;
 	if (level_count >= 2) {
-		pwcl |= static_cast<std::uint64_t>(bases[1] & 0x1Fu) << 10;
-		pwcl |= static_cast<std::uint64_t>(widths[1] & 0x1Fu) << 15;
+		pwcl |= static_cast<std::uint64_t>(bases[1] & 0x1Fu) << 10u;
+		pwcl |= static_cast<std::uint64_t>(widths[1] & 0x1Fu) << 15u;
 	}
 	if (level_count >= 3) {
-		pwcl |= static_cast<std::uint64_t>(bases[2] & 0x1Fu) << 20;
-		pwcl |= static_cast<std::uint64_t>(widths[2] & 0x1Fu) << 25;
+		pwcl |= static_cast<std::uint64_t>(bases[2] & 0x1Fu) << 20u;
+		pwcl |= static_cast<std::uint64_t>(widths[2] & 0x1Fu) << 25u;
 	}
 	// PTEWidth=0 (64-bit entries).
 
@@ -172,11 +172,11 @@ Rocinante::Optional<PageWalkerConfig> Make4KiBPageWalkerConfig(Paging::AddressSp
 	std::uint64_t pwch = 0;
 	if (level_count >= 4) {
 		pwch |= static_cast<std::uint64_t>(bases[3] & 0x3Fu);
-		pwch |= static_cast<std::uint64_t>(widths[3] & 0x3Fu) << 6;
+		pwch |= static_cast<std::uint64_t>(widths[3] & 0x3Fu) << 6u;
 	}
 	if (level_count >= 5) {
-		pwch |= static_cast<std::uint64_t>(bases[4] & 0x3Fu) << 12;
-		pwch |= static_cast<std::uint64_t>(widths[4] & 0x3Fu) << 18;
+		pwch |= static_cast<std::uint64_t>(bases[4] & 0x3Fu) << 12u;
+		pwch |= static_cast<std::uint64_t>(widths[4] & 0x3Fu) << 18u;
 	}
 
 	return PageWalkerConfig{.pwcl = pwcl, .pwch = pwch};

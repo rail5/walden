@@ -33,7 +33,7 @@ namespace VirtualLayout {
 		if (virtual_address_bits == 0) return 0;
 		if (virtual_address_bits >= 64) return 0;
 		return (static_cast<std::uintptr_t>(~0ull) << virtual_address_bits) |
-			(static_cast<std::uintptr_t>(1ull) << (virtual_address_bits - 1));
+			(static_cast<std::uintptr_t>(1ull) << (virtual_address_bits - 1u));
 	}
 
 	// Policy offsets within the higher-half region.

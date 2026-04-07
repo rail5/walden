@@ -6,7 +6,6 @@
 #pragma once
 
 #include <cstddef>
-#include <cstdint>
 
 namespace Rocinante::Memory::Heap {
 

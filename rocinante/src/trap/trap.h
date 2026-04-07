@@ -125,7 +125,7 @@ enum class PagingFaultResult : std::uint8_t {
 	Handled,
 };
 
-using PagingFaultObserver = PagingFaultResult (*)(TrapFrame& tf, const PagingFaultEvent& event);
+using PagingFaultObserver = PagingFaultResult (*)(TrapFrame* tf, const PagingFaultEvent& event);
 
 // Installs a global observer for paging exceptions. Passing nullptr clears it.
 void SetPagingFaultObserver(PagingFaultObserver observer);
@@ -134,7 +134,7 @@ void SetPagingFaultObserver(PagingFaultObserver observer);
 //
 // If the observer returns Handled, the caller may return from the trap handler
 // and retry the faulting instruction after the observer has repaired state.
-PagingFaultResult DispatchPagingFault(TrapFrame& tf, const PagingFaultEvent& event);
+PagingFaultResult DispatchPagingFault(TrapFrame* tf, const PagingFaultEvent& event);
 
 /**
  * @brief Installs exception/interrupt entry points into the relevant CSRs.

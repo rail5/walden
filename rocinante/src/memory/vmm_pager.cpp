@@ -21,24 +21,24 @@
 
 namespace {
 
-static const Rocinante::Memory::VirtualMemoryAreaSet* g_kernel_vmas = nullptr;
+const Rocinante::Memory::VirtualMemoryAreaSet* g_kernel_vmas = nullptr;
 
-static bool IsKernelMode(const Rocinante::Trap::PagingFaultEvent& event) {
+bool IsKernelMode(const Rocinante::Trap::PagingFaultEvent& event) {
 	return event.current_privilege_level == 0;
 }
 
-static bool IsPageInvalidLoadOrStore(std::uint64_t exception_code) {
+bool IsPageInvalidLoadOrStore(std::uint64_t exception_code) {
 	// LoongArch-Vol1-EN.html, Table 21 (Table of exception encoding).
 	static constexpr std::uint64_t kExceptionCodePil = 0x1; // page invalid for load
 	static constexpr std::uint64_t kExceptionCodePis = 0x2; // page invalid for store
 	return exception_code == kExceptionCodePil || exception_code == kExceptionCodePis;
 }
 
-static std::uintptr_t VirtualPageBase(std::uintptr_t virtual_address) {
+std::uintptr_t VirtualPageBase(std::uintptr_t virtual_address) {
 	return virtual_address & ~static_cast<std::uintptr_t>(Rocinante::Memory::Paging::kPageOffsetMask);
 }
 
-static bool AccessIsPermittedByVma(const Rocinante::Memory::VirtualMemoryArea& vma, Rocinante::Trap::PagingAccessType access) {
+bool AccessIsPermittedByVma(const Rocinante::Memory::VirtualMemoryArea& vma, Rocinante::Trap::PagingAccessType access) {
 	using Rocinante::Memory::Paging::AccessPermissions;
 	using Rocinante::Memory::Paging::ExecutePermissions;
 
@@ -64,7 +64,7 @@ void ConfigureKernelVirtualMemoryAreas(const VirtualMemoryAreaSet* areas) {
 }
 
 Rocinante::Trap::PagingFaultResult PagingFaultObserver(
-	Rocinante::TrapFrame& tf,
+	Rocinante::TrapFrame* tf,
 	const Rocinante::Trap::PagingFaultEvent& event
 ) {
 	(void)tf;
@@ -159,7 +159,7 @@ Rocinante::Trap::PagingFaultResult PagingFaultObserver(
 		g_handling = false;
 		return Rocinante::Trap::PagingFaultResult::NotHandled;
 	}
-	const std::size_t page_offset = static_cast<std::size_t>(
+	const auto page_offset = static_cast<std::size_t>(
 		offset_bytes / Rocinante::Memory::Paging::kPageSizeBytes);
 
 	auto& pmm = Rocinante::Memory::GetPhysicalMemoryManager();

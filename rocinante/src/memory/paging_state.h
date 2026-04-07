@@ -5,8 +5,6 @@
 
 #pragma once
 
-#include <cstdint>
-
 #include <src/memory/paging.h>
 
 namespace Rocinante::Memory {

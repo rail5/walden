@@ -65,29 +65,29 @@ namespace PteBits {
 	// define the high-bit permission fields because they affect address masking.
 	//
 	// Used by TLB hardware.
-	static constexpr std::uint64_t kValid = (1ull << 0);
-	static constexpr std::uint64_t kDirty = (1ull << 1);
+	static constexpr std::uint64_t kValid = (1ull << 0u);
+	static constexpr std::uint64_t kDirty = (1ull << 1u);
 	static constexpr std::uint64_t kPrivilegeLevelShift = 2;
 	static constexpr std::uint64_t kPrivilegeLevelMask = (3ull << kPrivilegeLevelShift);
 	static constexpr std::uint64_t kCacheShift = 4;
 	static constexpr std::uint64_t kCacheMask = (3ull << kCacheShift);
 	// Bit 6 is G (Global) for leaf entries (common pages). For intermediate
 	// directory entries, the privileged spec uses bit 6 as the huge-page indicator.
-	static constexpr std::uint64_t kGlobal = (1ull << 6);
+	static constexpr std::uint64_t kGlobal = (1ull << 6u);
 	// The page-table entry format defined in the privileged spec includes fields
 	// used during page walking but not filled into TLB entries.
 	// - P: physical page exists
 	// - W: writable
 	// See LoongArch-Vol1-EN.html, "Table entry format for common pages" and the
 	// accompanying text describing the P and W fields.
-	static constexpr std::uint64_t kPresent = (1ull << 7);
-	static constexpr std::uint64_t kWrite = (1ull << 8);
+	static constexpr std::uint64_t kPresent = (1ull << 7u);
+	static constexpr std::uint64_t kWrite = (1ull << 8u);
 
 	// 64-bit-only permission bits.
 	// Spec naming: NR = non-readable, NX = non-executable, RPLV = restrict PLV check.
-	static constexpr std::uint64_t kNoRead = (1ull << 61);
-	static constexpr std::uint64_t kNoExecute = (1ull << 62);
-	static constexpr std::uint64_t kRestrictPrivilegeLevel = (1ull << 63);
+	static constexpr std::uint64_t kNoRead = (1ull << 61u);
+	static constexpr std::uint64_t kNoExecute = (1ull << 62u);
+	static constexpr std::uint64_t kRestrictPrivilegeLevel = (1ull << 63u);
 } // namespace PteBits
 
 enum class CacheMode : std::uint8_t {
