@@ -12,7 +12,7 @@ namespace Rocinante {
 
 struct NullOpt {
 	struct Init {};
-	constexpr explicit NullOpt(Init) {}
+	constexpr explicit NullOpt(Init /*ignored*/) {}
 };
 inline constexpr NullOpt nullopt{NullOpt::Init{}};
 
@@ -27,7 +27,7 @@ template<typename T>
 class Optional final {
 	private:
 		bool m_has_value{false};
-		alignas(T) unsigned char m_value_storage[sizeof(T)];
+		alignas(T) unsigned char m_value_storage[sizeof(T)]{};
 		T* ptr() { return reinterpret_cast<T*>(m_value_storage); }
 		const T* ptr() const { return reinterpret_cast<const T*>(m_value_storage); }
 
@@ -52,8 +52,11 @@ class Optional final {
 			return *this;
 		}
 
-		Optional(NullOpt) noexcept : m_has_value(false) {}
-		Optional& operator=(NullOpt) noexcept { reset(); return *this; }
+		Optional(NullOpt /*ignored*/) noexcept {}
+		Optional& operator=(NullOpt /*ignored*/) noexcept { reset(); return *this; }
+
+		Optional(Optional&&) = default;
+		Optional& operator=(Optional&&) = default;
 
 		~Optional() { reset(); }
 
@@ -76,7 +79,8 @@ class Optional final {
 		bool has_value() const { return m_has_value; }
 		T& value() { return *ptr(); }
 		const T& value() const { return *ptr(); }
-		const T& value_or(const T& default_value) const { return m_has_value ? *ptr() : default_value; }
+		T value_or(T default_value) const& { return m_has_value ? *ptr() : default_value; }
+		T value_or(T default_value) && { return m_has_value ? std::move(*ptr()) : std::move(default_value); }
 
 		const T& operator*() const { return *ptr(); }
 		T& operator*() { return *ptr(); }
