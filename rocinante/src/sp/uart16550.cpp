@@ -77,7 +77,7 @@ void Rocinante::Uart16550::write_hex_u64(std::uint64_t value) const {
 
 	puts("0x");
 	for (int shift = kTopNybbleShift; shift >= 0; shift -= kBitsPerNybble) {
-		const std::uint8_t nybble = static_cast<std::uint8_t>((value >> shift) & 0xFu);
+		const auto nybble = static_cast<std::uint8_t>((value >> shift) & 0xFu);
 		putc(kHexDigits[nybble]);
 	}
 }

@@ -48,6 +48,10 @@ class Uart16550 final {
 	
 	public:
 		constexpr explicit Uart16550(std::uintptr_t base_address) : m_base_address(base_address) {}
+		constexpr Uart16550() = delete;
+		~Uart16550() = default;
+		Uart16550(Uart16550&&) = default;
+		Uart16550& operator=(Uart16550&&) = default;
 
 		// Minimal byte span (starting at the UART base address) that must be mapped
 		// for this driver to function.

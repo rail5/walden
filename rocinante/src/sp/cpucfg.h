@@ -58,7 +58,7 @@ class CPUCFG final {
 			constexpr std::uint32_t LineSizeBytes() const { return 1u << LineSizeLog2; }
 		};
 	private:
-		static std::uint32_t _read_word_via_instruction(void*, std::uint32_t word_number) {
+		static std::uint32_t _read_word_via_instruction(void* /*context*/, std::uint32_t word_number) {
 			std::uint32_t value;
 			asm volatile(
 				"cpucfg %0, %1"

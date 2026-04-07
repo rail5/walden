@@ -26,11 +26,11 @@ struct MMIO final {
 		    std::conditional_t<W <= 32, std::uint32_t,
 		      std::uint64_t>>>;
 	
-	static inline void write(std::uintptr_t address, ValueType value) {
+	static void write(std::uintptr_t address, ValueType value) {
 		*reinterpret_cast<volatile ValueType*>(address) = value;
 	}
 
-	static inline ValueType read(std::uintptr_t address) {
+	static ValueType read(std::uintptr_t address) {
 		return *reinterpret_cast<volatile ValueType*>(address);
 	}
 };

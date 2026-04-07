@@ -35,13 +35,13 @@ namespace Csr {
 } // namespace Csr
 
 template<std::uint32_t CsrNumber>
-static inline std::uint64_t ReadCsr() {
+inline std::uint64_t ReadCsr() {
 	std::uint64_t value;
 	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(CsrNumber));
 	return value;
 }
 
-static void DumpMappedTranslationCsrs(const Rocinante::Uart16550& uart) {
+void DumpMappedTranslationCsrs(const Rocinante::Uart16550& uart) {
 	const std::uint64_t pgdl = ReadCsr<Csr::kPgdLow>();
 	const std::uint64_t pgdh = ReadCsr<Csr::kPgdHigh>();
 	const std::uint64_t pgd = ReadCsr<Csr::kPgd>();
@@ -57,7 +57,7 @@ static void DumpMappedTranslationCsrs(const Rocinante::Uart16550& uart) {
 	uart.puts("RVACFG:"); uart.write_hex_u64(rvacfg); uart.putc('\n');
 }
 
-static void DumpTlbRefillCsrsIfActive(const Rocinante::Uart16550& uart) {
+void DumpTlbRefillCsrsIfActive(const Rocinante::Uart16550& uart) {
 	const std::uint64_t tlbrera = ReadCsr<Csr::kTlbRefillExceptionReturnAddress>();
 	const bool is_tlbr = (tlbrera & 1ull) != 0;
 	if (!is_tlbr) return;
@@ -73,7 +73,7 @@ static void DumpTlbRefillCsrsIfActive(const Rocinante::Uart16550& uart) {
 	uart.puts("TLBREHI:  "); uart.write_hex_u64(tlbrehi); uart.putc('\n');
 }
 
-static const char* ExceptionCodeName(std::uint64_t exception_code, bool is_tlbr) {
+const char* ExceptionCodeName(std::uint64_t exception_code, bool is_tlbr) {
 	// LoongArch Vol.1: Table 21 (Table of exception encoding).
 	if (is_tlbr) return "TLBR";
 
@@ -89,13 +89,13 @@ static const char* ExceptionCodeName(std::uint64_t exception_code, bool is_tlbr)
 	}
 }
 
-static bool IsPagingException(std::uint64_t exception_code) {
+bool IsPagingException(std::uint64_t exception_code) {
 	// LoongArch Vol.1: Table 21 (Table of exception encoding).
 	// Page-fault-related ecodes occupy the contiguous range [0x1, 0x7].
 	return exception_code >= 0x1 && exception_code <= 0x7;
 }
 
-static const char* PagingAccessTypeNameOrNull(std::uint64_t exception_code) {
+const char* PagingAccessTypeNameOrNull(std::uint64_t exception_code) {
 	// LoongArch Vol.1: Table 21 (Table of exception encoding).
 	// - 0x1 PIL: page invalid for load
 	// - 0x2 PIS: page invalid for store
@@ -110,7 +110,7 @@ static const char* PagingAccessTypeNameOrNull(std::uint64_t exception_code) {
 	}
 }
 
-static Rocinante::Trap::PagingAccessType PagingAccessTypeFromExceptionCode(std::uint64_t exception_code) {
+Rocinante::Trap::PagingAccessType PagingAccessTypeFromExceptionCode(std::uint64_t exception_code) {
 	// LoongArch Vol.1: Table 21 (Table of exception encoding).
 	// - 0x1 PIL: page invalid for load
 	// - 0x2 PIS: page invalid for store
@@ -125,7 +125,7 @@ static Rocinante::Trap::PagingAccessType PagingAccessTypeFromExceptionCode(std::
 	}
 }
 
-static std::uint64_t CurrentPrivilegeLevelFromCrmd(std::uint64_t crmd) {
+std::uint64_t CurrentPrivilegeLevelFromCrmd(std::uint64_t crmd) {
 	// LoongArch Vol.1: Section 7.4.1 (CRMD), Table 15.
 	// CSR.CRMD.PLV is bits [1:0], legal values 0..3.
 	static constexpr std::uint64_t kCrmdPrivilegeLevelMask = 0x3;
@@ -216,7 +216,7 @@ extern "C" void RocinanteTrapHandler(Rocinante::TrapFrame* tf) {
 	// LoongArch EXCCODE values (subset used for early bring-up).
 	constexpr std::uint64_t kExceptionCodeBreak = 0x0c;
 	// ESTAT.IS bit 11 corresponds to the timer interrupt line (see src/trap.cpp).
-	constexpr std::uint64_t kTimerInterruptLineBit = (1ull << 11);
+	constexpr std::uint64_t kTimerInterruptLineBit = (1ull << 11u);
 
 	// Interrupts arrive with EXCCODE=0 and the pending lines in ESTAT.IS.
 	if (exception_code == 0 && (interrupt_status & kTimerInterruptLineBit) != 0) {

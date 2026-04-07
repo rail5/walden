@@ -21,18 +21,18 @@ namespace Csr {
 	constexpr std::uint32_t MachineErrorEntryAddress = 0x93; // CSR.MERRENTRY
 	constexpr std::uint32_t TimerConfiguration = 0x41;      // CSR.TCFG
 	constexpr std::uint32_t TimerInterruptClear = 0x44;     // CSR.TINTCLR
-}
+} // namespace Csr
 
 namespace CurrentModeInformation {
 	// CRMD.IE (bit 2): Global interrupt enable.
-	constexpr std::uint64_t InterruptEnable = (1ull << 2);
-}
+	constexpr std::uint64_t InterruptEnable = (1ull << 2u);
+} // namespace CurrentModeInformation
 
 namespace ExceptionConfiguration {
 	// ECFG.IM bit positions (interrupt mask bits). Timer is line 11.
 	[[maybe_unused]] constexpr std::uint32_t TimerInterruptLine = 11;
 	constexpr std::uint32_t TimerInterruptMaskBit = (1u << TimerInterruptLine);
-}
+} // namespace ExceptionConfiguration
 
 namespace TimerConfiguration {
 	// TCFG bitfield:
@@ -40,47 +40,47 @@ namespace TimerConfiguration {
 	// - bit 1: PERIOD (periodic mode)
 	// - bits [??:2]: VAL (initial count value)
 	constexpr std::uint64_t Enable = 1ull;
-	[[maybe_unused]] constexpr std::uint64_t Periodic = (1ull << 1);
+	[[maybe_unused]] constexpr std::uint64_t Periodic = (1ull << 1u);
 	constexpr std::uint32_t InitialValueShift = 2;
-}
+} // namespace TimerConfiguration
 
-static inline std::uint64_t ReadCurrentModeInformation() {
+inline std::uint64_t ReadCurrentModeInformation() {
 	std::uint64_t value;
 	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(Csr::CurrentModeInformation));
 	return value;
 }
 
-static inline void WriteCurrentModeInformation(std::uint64_t value) {
+inline void WriteCurrentModeInformation(std::uint64_t value) {
 	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::CurrentModeInformation));
 }
 
-static inline std::uint32_t ReadExceptionConfiguration() {
+inline std::uint32_t ReadExceptionConfiguration() {
 	std::uint64_t value;
 	asm volatile("csrrd %0, %1" : "=r"(value) : "i"(Csr::ExceptionConfiguration));
 	return static_cast<std::uint32_t>(value);
 }
 
-static inline void WriteExceptionConfiguration(std::uint32_t value) {
+inline void WriteExceptionConfiguration(std::uint32_t value) {
 	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::ExceptionConfiguration));
 }
 
-static inline void WriteExceptionEntryAddress(std::uint64_t value) {
+inline void WriteExceptionEntryAddress(std::uint64_t value) {
 	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::ExceptionEntryAddress));
 }
 
-static inline void WriteTlbRefillEntryAddress(std::uint64_t value) {
+inline void WriteTlbRefillEntryAddress(std::uint64_t value) {
 	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::TlbRefillEntryAddress));
 }
 
-static inline void WriteMachineErrorEntryAddress(std::uint64_t value) {
+inline void WriteMachineErrorEntryAddress(std::uint64_t value) {
 	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::MachineErrorEntryAddress));
 }
 
-static inline void WriteTimerConfiguration(std::uint64_t value) {
+inline void WriteTimerConfiguration(std::uint64_t value) {
 	asm volatile("csrwr %0, %1" :: "r"(value), "i"(Csr::TimerConfiguration));
 }
 
-static inline void ClearPendingTimerInterruptInCsr() {
+inline void ClearPendingTimerInterruptInCsr() {
 	// TINTCLR.TI is bit 0. Writing 1 clears the pending timer interrupt.
 	asm volatile("csrwr %0, %1" :: "r"(1ull), "i"(Csr::TimerInterruptClear));
 }
@@ -88,7 +88,7 @@ static inline void ClearPendingTimerInterruptInCsr() {
 extern "C" void __exception_entry();
 extern "C" void __tlb_refill_entry();
 
-static Rocinante::Trap::PagingFaultObserver g_paging_fault_observer = nullptr;
+Rocinante::Trap::PagingFaultObserver g_paging_fault_observer = nullptr;
 
 } // namespace
 
