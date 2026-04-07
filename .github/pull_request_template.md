@@ -1,7 +1,7 @@
 ## Checks
 
 <!-- Verify all of the following before submitting your pull request -->
-- [&#10003;] The code follows the [general style of this project](https://github.com/rail5/walden/blob/main/CONTRIBUTING.md)
+- [&#10003;] The code follows the [general style of this project](https://github.com/rail5/walden/blob/main/STANDARDS.md)
 
 - [&#10003;] All relevant tests have been added and/or updated to cover the changes in this pull request
 
